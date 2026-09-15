@@ -1,0 +1,28 @@
+{
+  "outputStyle": "research-mentor",
+  "permissions": {
+    "defaultMode": "plan",
+    "ask": [
+      "Edit",
+      "Write",
+      "MultiEdit",
+      "NotebookEdit"
+    ],
+    "allow": [
+      "Bash(git status)",
+      "Bash(git diff *)",
+      "Bash(git log *)",
+      "Bash(pytest *)",
+      "Bash(python -m pytest *)",
+      "Bash(curl http://localhost:*)",
+      "Bash(curl http://127.0.0.1:*)",
+      "PowerShell(git status)",
+      "PowerShell(git diff *)",
+      "PowerShell(git log *)",
+      "PowerShell(pytest *)",
+      "PowerShell(python -m pytest *)",
+      "PowerShell(curl.exe http://localhost:*)",
+      "PowerShell(curl.exe http://127.0.0.1:*)"
+    ]
+  }
+}

@@ -1,0 +1,38 @@
+# Secrets — users bring their own API keys; never commit them
+.env
+.env.*
+!.env.example
+
+# SQLite checkpoints / saved reviews (AsyncSqliteSaver), incl. WAL side files
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+
+# Fetched papers — read, don't redistribute (see licensing rules in CLAUDE.md)
+*.pdf
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.venv/
+venv/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Claude Code per-user overrides (shared config in .claude/settings.json is committed)
+.claude/settings.local.json
+
+# Editors / OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
