@@ -1,0 +1,33 @@
+[project]
+name = "deep-research"
+version = "0.1.0"
+description = "Self-hosted deep research agent: recursive literature review with LangGraph, streamed to a web UI."
+readme = "README.md"
+authors = [
+    { name = "XIAOJUN YE", email = "xiaojun.ye1312@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "langchain-core>=1.6.3",
+    "langchain-deepseek>=1.1.0",
+    "langchain-openai>=1.6.2",
+    "langgraph>=1.2.11",
+    "pydantic>=2.13.5",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.14,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["--strict-markers"]
+markers = [
+    "integration: calls real LLM APIs; skipped unless that provider's API key is set",
+]

@@ -19,9 +19,17 @@ description: This project's LangGraph implementation patterns — state schema s
   explicitly allowlisted. Anything missing from the list breaks resuming a
   run from SQLite. When you add a model to state, add it to the allowlist
   in the same change.
-- Every key a parallel `Send` branch writes to needs an explicit reducer
-  (e.g. `Annotated[list[str], operator.add]`), or concurrent writes silently
-  clobber each other instead of merging.
+- A key needs an explicit reducer (e.g. `Annotated[list[str], operator.add]`)
+  in two cases:
+  1. **More than one node writes it in the same step.** This means parallel `Send` branches
+     *or* static fan-out edges. Without a reducer, LangGraph raises
+     `InvalidUpdateError: At key 'x': Can receive only one value per step`
+     (confirmed on langgraph 1.2.11). It fails loudly; it does not silently overwrite.
+  2. **The value should accumulate across sequential steps** (e.g.
+     `explored_subtopics` across rounds). Without a reducer, each write
+     replaces the previous value.
+- Checking the run context: calling the graph without `context=` makes
+  `runtime.context` `None`, so it fails late with `AttributeError`.
 
 ## Subtopic bookkeeping
 
@@ -40,14 +48,16 @@ description: This project's LangGraph implementation patterns — state schema s
   that has failed **2** times (D-020).
 - Zero search results is a **success**: mark the subtopic explored (D-021).
 - Skip a subtopic if its normalized form is already explored, or if ≥ 60% of
-  its results are already in `seen_paper_ids` (D-022). Zero results never
-  reach the overlap check. Pass `seen_paper_ids` in the `Send` payload, and give it a
+  its results are already in `seen_paper_ids` (D-022). The overlap check applies only
+  when there are ≥ 3 results (D-028), and zero results never reach it. Pass `seen_paper_ids` in the `Send` payload, and give it a
   deduplicating reducer.
-- The worker catches only expected external or I/O failures (httpx errors,
-  `ValidationError` on external data). Never catch `BaseException`, and let
-  programming errors crash (D-023). N counts failed worker runs, not HTTP
-  retries (D-024).
-- `max_depth = 2` baseline (D-025).
+- The worker catches exactly
+  `(httpx.TransportError, httpx.HTTPStatusError, pydantic.ValidationError)`
+  (D-023, D-027). Never catch `BaseException`, let programming errors crash,
+  and add no backoff around LLM calls, since the OpenAI client already retries. N counts
+  failed worker runs, not HTTP retries (D-024).
+- `depth` is 0-indexed. Recurse while `depth < max_depth`. With `max_depth = 2`,
+  that's 3 search passes (D-025, D-026).
 - Reasoning and open questions (subtopic comparison, which exceptions to
   catch) are in `docs/decisions.md`.
 

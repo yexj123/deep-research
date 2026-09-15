@@ -13,21 +13,24 @@ instead of a script you run from the terminal.
 
 `graph.astream()` accepts a list of `stream_mode`s and interleaves them on
 one iterator — this is the whole trick, don't reach for websockets or a
-task queue before you've tried it:
+task queue before you've tried it. This project uses `version="v2"`
+(D-030): every chunk is a dict with `type`, `ns` and `data`.
 
 ```python
-async for mode, chunk in graph.astream(
+async for chunk in graph.astream(
     {"question": question},
     config={"configurable": {"thread_id": thread_id}, "recursion_limit": 150},
+    context=RunContext(provider=provider),   # per-run provider (D-015)
     stream_mode=["updates", "custom", "messages"],
+    version="v2",
 ):
-    match mode:
+    match chunk["type"]:
         case "updates":
-            ...   # a node just finished — which one, and its output
+            ...   # chunk["data"] == {node_name: that node's update}
         case "custom":
             ...   # progress you emit yourself, see below
         case "messages":
-            token, metadata = chunk   # LLM tokens from the synthesize node
+            token, metadata = chunk["data"]   # metadata["langgraph_node"] names the node
 ```
 
 - `updates` — one event per finished node. This is your "decompose →

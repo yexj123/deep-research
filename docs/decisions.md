@@ -166,31 +166,72 @@ and what was rejected. It's the answer to "why did you do it this way?"
 ### D-025 — `max_depth = 2` as the baseline
 - **Decision:** `max_depth = 2` to start, to be tuned in the thesis evaluation.
 
+### D-026 — `depth` is 0-indexed
+- **Decision:** `depth = 0` is the first search pass. `gap_check` routes back
+  to `decompose` while `depth < max_depth`. With `max_depth = 2`, that's up to
+  **3 search passes**: the first plus 2 recursive rounds.
+- **Why:** the N = 2 retry cap (D-020) needs room to apply. A subtopic that
+  fails in passes 1 and 2 is skipped in pass 3.
+
+### D-027 — The worker's exact catch list
+- **Decision:** `except (httpx.TransportError, httpx.HTTPStatusError, pydantic.ValidationError)`.
+  This refines D-023. No manual backoff around LLM calls.
+- **Why:** `TransportError` covers timeouts *and* connection, read and protocol
+  errors. `TimeoutException` alone would let a DNS failure crash the run.
+  LLM calls raise `openai.APIError` subclasses, not httpx ones
+  (`ChatDeepSeek` subclasses `BaseChatOpenAI`, confirmed in the installed
+  packages), and the OpenAI client already retries them.
+- **Note:** `HTTPStatusError` is raised only when the code calls
+  `response.raise_for_status()`.
+
+### D-028 — Paper overlap needs at least 3 results
+- **Decision:** the 60% overlap rule (D-022) applies only when the search
+  returns ≥ 3 papers. Below that, only the normalized-match check applies.
+  Zero results still follow D-021.
+- **Why:** with 1 or 2 results, a single paper already read means 50–100% overlap, which is noise.
+
+### D-029 — A hand-written client factory
+- **Decision:** a small factory maps `Literal["openai", "deepseek"]` to
+  `ChatOpenAI` / `ChatDeepSeek`.
+- **Why:** it's the point where tests swap in `GenericFakeChatModel`. It's typed,
+  and it avoids pulling in the whole `langchain` package.
+- **Rejected:** `init_chat_model` (no clean way to swap in a fake; extra dependency).
+
+### D-030 — Streaming uses `version="v2"`
+- **Decision:** `astream(..., version="v2")` and `ainvoke(..., version="v2")`.
+- **Why:** every stream chunk is `{"type", "ns", "data"}`, and
+  `ainvoke(..., version="v2").value` comes back as the state dataclass
+  (confirmed against langgraph 1.2.11). `graph.get_state(config).values` is still a
+  plain dict.
+
+### D-031 — Test strategy
+- **Decision:** the default tests use `GenericFakeChatModel`, with no keys, no
+  cost and no network. Real-API tests are marked `@pytest.mark.integration` and
+  skipped when that provider's key isn't set. `--strict-markers` is on, so a mistyped
+  marker is an error instead of a test that silently never runs.
+- **Why:** the default test run must not depend on your wallet or a provider's uptime.
+
 ---
 
 ## Open (proposed, not decided)
 
-- **What `depth` counts.** Does `max_depth = 2` mean 2 rounds in total, or
-  the first round plus 2 recursive ones? With 2 rounds in total, a subtopic can
-  fail at most twice before the run ends, so the N = 2 cap (D-020) can never
-  apply.
-- **The exact exception list (D-023).** `httpx.TimeoutException` alone misses
-  `ConnectError`/`ReadError`/`RemoteProtocolError`, which are siblings under
-  `httpx.TransportError`. Proposed: `httpx.TransportError` + `httpx.HTTPStatusError`.
-  If the worker also calls the LLM, the chat models raise `openai.APIError`
-  subclasses, not httpx ones, and the OpenAI client already retries internally,
-  so don't add your own backoff on top.
-- **Paper overlap with very few results.** With 1 result, one paper already read
-  is 100% overlap. Should there be a minimum result count before D-022 applies?
-- **Models per role.** Planner, gap checker and synthesizer each get a configured
-  model. The app refuses to start if a role that needs structured output gets a model without
-  it. Build the client with a small explicit factory or `init_chat_model`?
-  (Proposed: factory.)
-- **Fail fast on a missing key.** Proposed: check the selected provider's key
-  before the graph starts, and run tests against both providers.
-- **Streaming format.** `astream(..., version="v2")` (typed `StreamPart`, state
-  converted back into your types) or the tuple form currently shown in the
-  `web-architecture` skill.
+- **Check the run context when the graph is called.** Confirmed: invoking the graph
+  without `context=` doesn't fail at the call. `runtime.context` is `None`,
+  and the run crashes with `AttributeError` in the first node that reads it.
+  Proposed: one public entry function that requires the context, so the graph
+  is never invoked without one.
+- **Models per role.** The planner, gap checker and synthesizer each get a
+  configured model. The app refuses to start if a role that needs structured
+  output gets a model without it. The factory itself is decided (D-029).
+- **Fail fast on a missing key.** Proposed: the factory raises an error naming
+  the missing environment variable before any graph work starts. The API route checks
+  again at the web-layer milestone.
+- **Treat 4xx and 5xx differently (D-027).** Catching every `HTTPStatusError` also
+  catches 400/404 errors caused by bugs in your own request code, which would then
+  count toward the retry cap instead of crashing. Proposed: treat 429 and 5xx as
+  external failures and re-raise other 4xx.
+- **pytest-asyncio mode.** Currently `strict`, the default: every async test needs
+  `@pytest.mark.asyncio`. The alternative, `auto`, applies it for you.
 - **Making failures visible.** Proposed: a `custom` stream event, plus a coverage
   limitations section in the review listing failed and zero-result subtopics.
 - **Prompt-injection defenses.** Proposed: citation IDs restricted to the
