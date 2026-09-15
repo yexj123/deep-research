@@ -3,7 +3,8 @@
 A self-hosted web app — same idea as Open WebUI, but the "chat" is a
 LangGraph agent: give it a research question, it searches literature,
 recursively decomposes into subtopics when it finds gaps, and synthesizes
-a cited review. Python + LangGraph + FastAPI + the Anthropic API. Built for
+a cited review. Python + LangGraph + FastAPI + the OpenAI API (DeepSeek
+selectable from the UI). Built for
 thesis and personal use, published on GitHub.
 
 ## Timeline
@@ -27,6 +28,10 @@ You're the architect and reviewer, not the typist.
 - I need to be able to defend every line — to a judge, an advisor, or a
   stranger's GitHub issue — so optimize for my understanding over shipping
   speed.
+- **Log every design decision in `docs/decisions.md` when it's made:** what was
+  chosen, why, and what was rejected. A recommendation I haven't confirmed goes
+  under its **Open** section, not the log. When an open item gets settled,
+  move it up with a new ID and update any skill that states the rule.
 - CLAUDE.md instructions are context, not enforcement — if something here
   really has to hold, it's backed by a permission rule or tool restriction,
   not just this paragraph.
@@ -34,16 +39,22 @@ You're the architect and reviewer, not the typist.
 ## Tech stack
 
 - Backend: Python 3.12, FastAPI, the LangGraph agent below
+- LLM: OpenAI by default; the user can switch to DeepSeek (OpenAI-compatible
+  API, `https://api.deepseek.com`) per run from the UI. Both are called
+  through LangChain chat models (`langchain-openai`, `langchain-deepseek`)
+  so `stream_mode="messages"` token streaming works for either. The
+  provider is chosen per run through LangGraph runtime `context`, never
+  a module-level global.
 - Streaming: Server-Sent Events wrapping `graph.astream(..., stream_mode=
   ["updates","custom","messages"])` — full pattern in `web-architecture`
 - Persistence: SQLite via `langgraph-checkpoint-sqlite` (`AsyncSqliteSaver`)
 - Frontend: **TODO** — decide together, tradeoffs in `web-architecture`
-- Package manager: **TODO**
+- Package manager: uv (`uv.lock` is committed; `uv sync` installs)
 
 ## Legal / licensing ground rules (settled — don't re-litigate per session)
 
 - MIT license on this repo.
-- Users bring their own API keys (Anthropic, and arXiv/Semantic Scholar if
+- Users bring their own API keys (OpenAI and/or DeepSeek, and arXiv/Semantic Scholar if
   used) — never bake mine in, never commit a `.env`.
 - arXiv/Semantic Scholar metadata: free to use. Full PDFs: fetch to read,
   don't cache-and-redistribute — most papers don't permit it.
@@ -91,6 +102,7 @@ src/deep_research/
 frontend/              # shape depends on the SvelteKit-vs-htmx decision — see web-architecture
 tests/{agent,api}/, conftest.py
 notebooks/              # thesis-side evaluation, not shipped code
+docs/decisions.md       # design decision log: what, why, what was rejected
 ```
 
 `src/` layout, not flat — avoids import-path footguns and matches how the
@@ -101,8 +113,8 @@ conversation.
 
 ## Commands
 
-- Backend run: **TODO** (something like `uvicorn app.main:app --reload`)
-- Test: `pytest`
+- Backend run: **TODO** (once `api/main.py` exists: `uv run uvicorn deep_research.api.main:app --reload`)
+- Test: `uv run pytest`
 - Frontend: **TODO**
 
 ## Skills & subagents in this project

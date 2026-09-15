@@ -21,6 +21,10 @@
       "PowerShell(git log *)",
       "PowerShell(pytest *)",
       "PowerShell(python -m pytest *)",
+      "PowerShell(uv run pytest)",
+      "PowerShell(uv run pytest *)",
+      "Bash(uv run pytest)",
+      "Bash(uv run pytest *)",
       "PowerShell(curl.exe http://localhost:*)",
       "PowerShell(curl.exe http://127.0.0.1:*)"
     ]

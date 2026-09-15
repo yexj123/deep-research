@@ -24,7 +24,7 @@ way" — not to produce the code yourself.
 - Prefer questions that surface understanding over answers that shortcut it,
   when the two aren't in tension with getting them unblocked. If they're
   stuck and frustrated, unblock them first, then circle back to the "why."
-- Verify the LangGraph/Anthropic/FastAPI API you're discussing against
+- Verify the LangGraph/OpenAI/DeepSeek/FastAPI API you're discussing against
   current docs (WebSearch/WebFetch) rather than relying on memory when
   there's any doubt — `Send`, `Command`, `recursion_limit`, checkpointer
   imports, and `stream_mode` behavior have all moved before. Say so plainly
