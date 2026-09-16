@@ -3,64 +3,25 @@
 What's done, what's next, and whose job each item is. Design reasoning
 lives in [`decisions.md`](decisions.md); this file only tracks status.
 
-**Last updated:** 2026-09-15 · **Current milestone:** 1 (`intake → synthesize`)
+**Last updated:** 2026-09-16 · **Current milestone:** 2 (one real source: arXiv)
 
 ---
 
 ## Do next (you)
 
-- [x] Moved `agent/state.py` into `src/deep_research/agent/`
-- [x] `__init__.py` files in `agent/`, `agent/nodes/`, `tests/`, `tests/agent/`
-      (add one to `tests/api/` when it exists)
+- [ ] **`.claude/settings.json` has an uncommitted change nobody reviewed:** `"MultiEdit"` in
+      the `ask` list became a second `"Edit"`. Decide whether to keep it, then commit or revert it.
 - [ ] **Fully quit and reopen VS Code once.** Claude Code gets its environment from
       VS Code, and it needs the new `UV_CACHE_DIR=E:\uv-cache` variable.
 - [ ] *(Optional)* Delete the old 55 MB uv cache on C::
       `uv cache clean --cache-dir "$env:LOCALAPPDATA\uv\cache"`
-- [ ] Commit the pending changes: `LICENSE`, `pyproject.toml`, `docs/`, and the skill
-      edit (ask Claude, or commit them yourself).
+- [ ] **Before writing milestone 2 code**, settle its open decisions (table below).
 
-## Milestone 1: `intake → synthesize` (you write)
-
-**Goal:** the graph compiles, the provider arrives through runtime context,
-tokens stream in `messages` mode, and state survives the checkpointer. No search yet.
-
-All paths below are under `src/deep_research/`.
-
-**Status:** done. `uv run pytest` gives 14 passed, 1 deselected, and the integration
-test passes against the real OpenAI API.
-
-- [x] `agent/state.py`: `ResearchState` dataclass (D-013)
-- [x] `agent/context.py`: `RunContext` dataclass with `provider: ProviderType`
-      *(optional: `frozen=True`)*
-- [x] `agent/config.py`: `API_KEY_ENV_VARS`, `MODEL_NAMES` (`gpt-4o`, `deepseek-flash`)
-- [x] `agent/llm.py`: client factory; clear errors for a missing key or model name (D-029, D-034)
-- [x] `agent/nodes/intake.py`: context, provider and question checks; returns `{"question": ...}` (D-033)
-- [x] `agent/nodes/synthesize.py`: milestone 1 system prompt; returns `{"review": reply.text}`
-- [x] `agent/graph.py`: `build_graph(model_factory, checkpointer)`, nodes named
-      `intake` / `synthesize` (D-032)
-- [x] `tests/agent/`: async tests, each with `@pytest.mark.asyncio`, using
-      `GenericFakeChatModel` (12 passing):
-  - [x] streamed tokens arrive as several `messages` chunks, with `langgraph_node == "synthesize"`
-  - [x] `updates` chunks arrive in node order
-  - [x] `ainvoke(..., version="v2").value` is a `ResearchState`
-  - [x] the checkpoint (`get_state(config).values`, a plain dict) contains `review`
-  - [x] the provider from the context reaches the factory
-  - [x] an empty question raises; a missing or invalid context raises
-  - [x] the factory raises when the API key is missing (use `monkeypatch.delenv`)
-- [x] `match="intake:"` moved into `pytest.raises(...)` in the three validation tests
-- [x] Integration tests are opt-in: `addopts` has `-m "not integration"` (D-036)
-- [x] `LLM_TIMEOUT_SECONDS = 60.0` / `LLM_MAX_RETRIES = 2` passed to both chat models
-      (D-038, D-039), with a parametrized unit test that fails if they're removed
-- [x] Integration test written (D-037); passed against the real OpenAI API
-      (`uv run pytest -m integration`, run 2026-09-16)
-- [ ] `uv run pytest` passes. Then ask Claude or `code-reviewer` for a review.
-- [ ] Commit milestone 1.
-
-## Later milestones
+## Upcoming milestones
 
 | # | Milestone | Open decisions to settle first (see `decisions.md` → Open) |
 |---|---|---|
-| 2 | One real source (arXiv), single subtopic, citation shape | `Source` object shape · prompt-injection defenses (citation IDs restricted to the retrieved set) |
+| 2 | One real source (arXiv), single subtopic, citation shape | `Source` object shape · prompt-injection defenses (citation IDs restricted to the retrieved set) · arXiv client: `httpx` directly or the `arxiv` package (affects D-027's exception list) |
 | 3 | `decompose` + `Send` fan-out, reducers | arXiv rate limiter (≤1 req / 3 s) · models per role · treating HTTP 4xx and 5xx differently |
 | 4 | `gap_check` + depth recursion, retry cap, paper overlap | making failures visible · `recursion_limit` value |
 | 5 | Web layer: FastAPI + SSE + `AsyncSqliteSaver` | frontend (SvelteKit or htmx) · public entry function |
@@ -68,12 +29,39 @@ test passes against the real OpenAI API.
 **Reminders for when these come up:**
 - **Milestone 2 onward:** add every custom Pydantic model or dataclass stored in state to
   `allowed_msgpack_modules` (D-014).
+- **Milestone 2:** replace the milestone 1 `SYSTEM_PROMPT` in `nodes/synthesize.py`. The new one
+  must cite retrieved sources.
+- **Milestone 3:** capture what `updates` chunks look like when several `Send` workers finish
+  in the same step (`docs/langgraph-outputs.md` §4).
 - **Milestone 5:** if you choose SvelteKit, add `node_modules/`, `.svelte-kit/` and the build output
   folder to `.gitignore`.
 
 ---
 
 ## Done
+
+### Milestone 1: `intake → synthesize` (commit `95fd66c`)
+The graph compiles, the provider arrives through runtime context, tokens stream in
+`messages` mode, and state survives the checkpointer. `uv run pytest`: 14 passed,
+1 deselected. The integration test passed against the real OpenAI API (2026-09-16).
+
+- [x] `agent/state.py`: `ResearchState` dataclass (D-013)
+- [x] `agent/context.py`: `RunContext` with the per-run `provider` (D-015)
+- [x] `agent/config.py`: key variables, model names (`gpt-4o`, `deepseek-flash`),
+      `LLM_TIMEOUT_SECONDS = 60.0`, `LLM_MAX_RETRIES = 2` (D-039)
+- [x] `agent/llm.py`: client factory with clear errors and explicit limits (D-029, D-034, D-038)
+- [x] `agent/nodes/intake.py`: context, provider and question checks (D-033)
+- [x] `agent/nodes/synthesize.py`: milestone 1 system prompt; returns the reply as `review`
+- [x] `agent/graph.py`: `build_graph(model_factory, checkpointer)` (D-032)
+- [x] `tests/agent/`: fake-model graph tests, factory tests including the limits, and an
+      opt-in integration test (D-031, D-036, D-037)
+
+### Docs, license and test policy (commit `82fada6`)
+- [x] MIT `LICENSE` and license metadata in `pyproject.toml` (checked in a built wheel)
+- [x] Integration tests deselected by default (`-m "not integration"`)
+- [x] `docs/decisions.md` D-032 to D-039; `docs/progress.md`; `docs/langgraph-outputs.md`
+      (output shapes captured from this graph)
+- [x] README: setup, tests, running integration tests
 
 ### Milestone 0: project skeleton (commit `a9505d1`)
 - [x] uv project with `src/` layout (`uv_build`), `uv.lock`, Python 3.12 pinned
@@ -84,8 +72,8 @@ test passes against the real OpenAI API.
 - [x] README (setup, bring-your-own-keys, tests)
 - [x] Removed `uv init`'s placeholder `main()` and script entry
 
-### Design (commits `b5b933c`, `a9505d1`, plus pending changes)
-- [x] Decision log `docs/decisions.md`, D-001 to D-035, with an Open section
+### Design log and conventions (commits `b5b933c`, `a9505d1`)
+- [x] Decision log `docs/decisions.md` with an Open section
 - [x] `CLAUDE.md` requires every decision to be logged when it's made
 - [x] Skills updated to match the decisions (`langgraph-conventions`,
       `web-architecture` v2 streaming example)
@@ -99,13 +87,11 @@ test passes against the real OpenAI API.
 - [x] `ainvoke(version="v2").value` returns the dataclass; `get_state().values` is a dict
 - [x] Calling the graph without `context=` makes `runtime.context` `None` → `AttributeError` later on
 - [x] `ChatDeepSeek` subclasses `BaseChatOpenAI` (raises `openai.*` errors)
+- [x] Without explicit limits, the OpenAI client under `ChatOpenAI` has `timeout=None`
 
-### Repo and environment
-- [x] Claude Code config moved into `.claude/` (agents, output style, skills, settings),
-      commit `fecf66d`
+### Repo and environment (commit `fecf66d` and machine setup)
+- [x] Claude Code config moved into `.claude/` (agents, output style, skills, settings)
 - [x] `git init -b main`; `.gitignore` covers `.env*`, SQLite + WAL files, PDFs
 - [x] PowerShell and `uv run pytest` permission allow rules
-- [x] MIT `LICENSE` and license metadata in `pyproject.toml`; checked in a built wheel
-      *(not committed yet)*
 - [x] `uv` installed and resolving on Claude Code's PATH
 - [x] uv cache moved to `E:\uv-cache` (no more hardlink warning)
