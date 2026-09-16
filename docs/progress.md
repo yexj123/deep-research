@@ -10,7 +10,7 @@ lives in [`decisions.md`](decisions.md); this file only tracks status.
 ## Do next (you)
 
 - [x] `.claude/settings.json`: removed `"MultiEdit"`, since Claude Code reported it "matches no known tool"
-      (duplicate `"Edit"` also removed; `CLAUDE.md` and the output style updated to match)
+      (duplicate `"Edit"` also removed; `CLAUDE.md` and the output style updated to match; commit `532473d`)
 - [ ] **Fully quit and reopen VS Code once.** Claude Code gets its environment from
       VS Code, and it needs the new `UV_CACHE_DIR=E:\uv-cache` variable.
 - [ ] *(Optional)* Delete the old 55 MB uv cache on C::
@@ -21,7 +21,7 @@ lives in [`decisions.md`](decisions.md); this file only tracks status.
 
 | # | Milestone | Open decisions to settle first (see `decisions.md` → Open) |
 |---|---|---|
-| 2 | One real source (arXiv), single subtopic, citation shape | **All decided (D-040 – D-050).** Next: plan the milestone 2 code (files, tests, saved arXiv responses for `MockTransport`) |
+| 2 | One real source (arXiv), single subtopic, citation shape | **All decided (D-040 – D-050, commit `532473d`).** Next: plan the milestone 2 code (files, tests, saved arXiv responses for `MockTransport`) |
 | 3 | `decompose` + `Send` fan-out, reducers | arXiv rate limiter (≤1 req / 3 s) · models per role · treating HTTP 4xx and 5xx differently |
 | 4 | `gap_check` + depth recursion, retry cap, paper overlap | making failures visible · `recursion_limit` value |
 | 5 | Web layer: FastAPI + SSE + `AsyncSqliteSaver` | frontend (SvelteKit or htmx) · public entry function |
