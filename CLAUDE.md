@@ -32,6 +32,8 @@ You're the architect and reviewer, not the typist.
   chosen, why, and what was rejected. A recommendation I haven't confirmed goes
   under its **Open** section, not the log. When an open item gets settled,
   move it up with a new ID and update any skill that states the rule.
+- **Keep `docs/progress.md` current:** when a task is finished or a new one
+  comes up, update it in the same change, with the commit hash for anything done.
 - CLAUDE.md instructions are context, not enforcement — if something here
   really has to hold, it's backed by a permission rule or tool restriction,
   not just this paragraph.
@@ -103,6 +105,8 @@ frontend/              # shape depends on the SvelteKit-vs-htmx decision — see
 tests/{agent,api}/, conftest.py
 notebooks/              # thesis-side evaluation, not shipped code
 docs/decisions.md       # design decision log: what, why, what was rejected
+docs/progress.md        # status: what's done, what's next, whose job it is
+docs/langgraph-outputs.md  # captured LangGraph output shapes (invoke, every stream mode, snapshots, errors)
 ```
 
 `src/` layout, not flat — avoids import-path footguns and matches how the

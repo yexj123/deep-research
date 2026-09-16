@@ -210,28 +210,98 @@ and what was rejected. It's the answer to "why did you do it this way?"
   skipped when that provider's key isn't set. `--strict-markers` is on, so a mistyped
   marker is an error instead of a test that silently never runs.
 - **Why:** the default test run must not depend on your wallet or a provider's uptime.
+- *When integration tests run was revised by D-036.*
 
----
+### D-032 — Dependencies are passed into `build_graph`
+- **Decision:** `build_graph(model_factory, checkpointer)`. Nodes get the
+  factory by wrapping it at build time. The runtime context stays plain run data
+  (`provider`).
+- **Why the factory is a parameter:** tests pass a factory that returns
+  `GenericFakeChatModel`, and every dependency is visible in the signature.
+- **Why the checkpointer is a parameter:** the thing that owns the checkpointer's
+  *lifetime* isn't the graph. Tests need a fresh `InMemorySaver` per test. At
+  the web-layer milestone, `AsyncSqliteSaver` is an async context manager that
+  the FastAPI app opens at startup and closes at shutdown, with its strict-msgpack
+  settings. If `build_graph` created its own checkpointer, both cases would
+  need `graph.py` rewritten.
+- **Rejected:** putting the factory in `RunContext` (mixes run data from the UI with
+  code wiring); monkeypatching in tests (breaks on import paths and hides the
+  dependency).
+
+### D-033 — `intake` checks the run context
+- **Decision:** `intake` raises a descriptive `ValueError` right away if
+  `runtime.context` is `None` or `provider` isn't one of the allowed values.
+- **Why:** without `context=`, LangGraph passes `None` and the run fails later
+  with `AttributeError` (confirmed on langgraph 1.2.11). A `Literal` type hint
+  on a dataclass isn't checked when the program runs, so `RunContext(provider="gemini")`
+  constructs without error. The check in `intake` covers every way into the graph.
+
+### D-034 — A missing API key fails in the factory
+- **Decision:** the client factory raises an error naming the missing
+  environment variable (`OPENAI_API_KEY` / `DEEPSEEK_API_KEY`) before any model
+  call.
+- **Why:** it fails at the point where the key is needed, with a message that
+  tells the user what to set, instead of a provider auth error in the middle of a run.
+
+### D-035 — pytest-asyncio stays in strict mode
+- **Decision:** `strict` (the default). Every async test carries
+  `@pytest.mark.asyncio`.
+- **Why:** there are few async tests, and the marker on each one shows its intent.
+- **Rejected:** `auto`.
+
+### D-036 — Integration tests are opt-in (revises D-031)
+- **Decision:** pytest `addopts` includes `"-m", "not integration"`. Plain `uv run pytest`
+  never calls a real API. `uv run pytest -m integration` runs those tests on purpose,
+  and they still skip when the key isn't set.
+- **Why:** under D-031 alone, a machine with `OPENAI_API_KEY` set made a paid, slow
+  call that can fail when the network does on every test run. Confirmed in a scratch copy: the
+  command-line `-m integration` overrides the `-m` in `addopts`.
+- **Rejected:** an opt-in variable (`RUN_INTEGRATION=1`) in the `skipif`: one more thing to remember,
+  when the `integration` marker already exists.
+- **Consequence:** a syntax error in an integration test file still breaks the default run,
+  because pytest imports every test file before deselecting anything.
+
+### D-037 — Integration test checks: final state plus real streaming
+- **Decision:** the integration test runs the graph once with `get_chat_model` and checks
+  (a) more than one `messages` chunk from `synthesize`, (b) a non-empty
+  `review` in the saved state, and (c) the joined streamed text equals the saved
+  `review`. It never compares against fixed text.
+- **Why:** a real model words things differently every run, so only properties can be
+  checked. Streaming is what milestone 5 depends on, and the fake model always
+  streams, so only a real provider can prove it.
+- **Rejected:** checking only the final state (doesn't test streaming); checking content
+  such as the "no sources consulted" disclaimer (flaky; that's prompt evaluation for
+  `notebooks/`).
+
+### D-038 — The client factory sets explicit timeout and retry limits
+- **Decision:** `get_chat_model` passes `timeout=` and `max_retries=` to both
+  `ChatOpenAI` and `ChatDeepSeek`, with values from `agent/config.py` (values under Open).
+- **Why:** when they're not set, the underlying OpenAI client is built with
+  `timeout=None` (confirmed on langchain-openai 1.6.2), so there's no time limit, and a
+  hung call blocks the run or a test indefinitely. Both classes accept the same two
+  parameters (confirmed).
+
+### D-039 — LLM limits: 60 s timeout, 2 retries
+- **Decision:** `LLM_TIMEOUT_SECONDS = 60.0` and `LLM_MAX_RETRIES = 2` in `agent/config.py`.
+- **Why:** the timeout applies to each network wait, not the whole call. While streaming,
+  it's the longest silence allowed between pieces of data; without streaming, it's the wait
+  for the complete reply, and a review of up to 500 words should fit well within 60 s. 2 retries
+  matches the OpenAI client's default, now stated explicitly. The names carry an `LLM_`
+  prefix and a unit because milestone 2 adds an arXiv HTTP timeout to the same config.
+- **Tested:** `test_client_has_explicit_timeout_and_retries` checks both providers. With the
+  limits removed from the factory, it fails with `assert None == 60.0` (confirmed in a scratch copy).
 
 ## Open (proposed, not decided)
 
-- **Check the run context when the graph is called.** Confirmed: invoking the graph
-  without `context=` doesn't fail at the call. `runtime.context` is `None`,
-  and the run crashes with `AttributeError` in the first node that reads it.
-  Proposed: one public entry function that requires the context, so the graph
-  is never invoked without one.
+- **A public entry function.** Revisit at the web-layer milestone: a wrapper that
+  requires `context`, in addition to the check in `intake` (D-033).
 - **Models per role.** The planner, gap checker and synthesizer each get a
   configured model. The app refuses to start if a role that needs structured
   output gets a model without it. The factory itself is decided (D-029).
-- **Fail fast on a missing key.** Proposed: the factory raises an error naming
-  the missing environment variable before any graph work starts. The API route checks
-  again at the web-layer milestone.
 - **Treat 4xx and 5xx differently (D-027).** Catching every `HTTPStatusError` also
   catches 400/404 errors caused by bugs in your own request code, which would then
   count toward the retry cap instead of crashing. Proposed: treat 429 and 5xx as
   external failures and re-raise other 4xx.
-- **pytest-asyncio mode.** Currently `strict`, the default: every async test needs
-  `@pytest.mark.asyncio`. The alternative, `auto`, applies it for you.
 - **Making failures visible.** Proposed: a `custom` stream event, plus a coverage
   limitations section in the review listing failed and zero-result subtopics.
 - **Prompt-injection defenses.** Proposed: citation IDs restricted to the

@@ -27,8 +27,14 @@ commit a `.env` file.
 uv run pytest
 ```
 
-The default tests use fake chat models and need no API keys. Tests marked
-`integration` call real APIs and are skipped when the provider's key isn't set.
+The default tests use fake chat models and need no API keys or network access.
+Tests marked `integration` call real, paid APIs. They don't run by default:
+
+```sh
+uv run pytest -m integration
+```
+
+They're also skipped when the provider's API key isn't set.
 
 ## Design decisions
 

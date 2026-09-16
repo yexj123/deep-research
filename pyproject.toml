@@ -3,6 +3,8 @@ name = "deep-research"
 version = "0.1.0"
 description = "Self-hosted deep research agent: recursive literature review with LangGraph, streamed to a web UI."
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     { name = "XIAOJUN YE", email = "xiaojun.ye1312@gmail.com" }
 ]
@@ -27,7 +29,8 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = ["--strict-markers"]
+# Integration tests make paid API calls: deselected by default, run with `uv run pytest -m integration`.
+addopts = ["--strict-markers", "-m", "not integration"]
 markers = [
     "integration: calls real LLM APIs; skipped unless that provider's API key is set",
 ]

@@ -28,8 +28,11 @@ description: This project's LangGraph implementation patterns — state schema s
   2. **The value should accumulate across sequential steps** (e.g.
      `explored_subtopics` across rounds). Without a reducer, each write
      replaces the previous value.
-- Checking the run context: calling the graph without `context=` makes
-  `runtime.context` `None`, so it fails late with `AttributeError`.
+- **Run context:** calling the graph without `context=` makes `runtime.context`
+  `None`, and `Literal` hints aren't checked at runtime. `intake` raises
+  `ValueError` if the context is missing or the provider is invalid (D-033).
+- **Dependencies:** `build_graph(model_factory, checkpointer)`. Nodes never
+  construct their own model client or checkpointer (D-032).
 
 ## Subtopic bookkeeping
 
