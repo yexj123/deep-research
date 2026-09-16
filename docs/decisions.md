@@ -73,6 +73,12 @@ and what was rejected. It's the answer to "why did you do it this way?"
   added to `allowed_msgpack_modules` in the same change.
 - **Why:** in strict msgpack mode, a type that isn't allowlisted can't be
   loaded back when a run resumes from SQLite.
+- **Correction (2026-09-16, confirmed on langgraph 1.2.11):** there is **no error**. A blocked type
+  is restored as a **plain `dict`**, with only a logged warning ("Blocked deserialization of
+  … not in allowed_msgpack_modules"), and the first attribute access fails far from the
+  cause. Without strict mode, the type is restored but LangGraph warns that this "will be
+  blocked in a future version." Separately, a plain dataclass's `tuple` fields come back as
+  `list`s; a Pydantic dataclass converts them back when it's restored.
 
 ### D-015 — LLM providers: OpenAI default, DeepSeek selectable per run
 - **Decision:** the UI chooses the provider for each run. The choice reaches nodes
@@ -183,6 +189,7 @@ and what was rejected. It's the answer to "why did you do it this way?"
   packages), and the OpenAI client already retries them.
 - **Note:** `HTTPStatusError` is raised only when the code calls
   `response.raise_for_status()`.
+- *Catch list extended for XML parsing by D-048.*
 
 ### D-028 — Paper overlap needs at least 3 results
 - **Decision:** the 60% overlap rule (D-022) applies only when the search
@@ -291,6 +298,114 @@ and what was rejected. It's the answer to "why did you do it this way?"
 - **Tested:** `test_client_has_explicit_timeout_and_retries` checks both providers. With the
   limits removed from the factory, it fails with `assert None == 60.0` (confirmed in a scratch copy).
 
+### D-040 — `Source` is a dataclass
+- **Decision:** the paper record stored in state (`Source`) is a dataclass, not a TypedDict or a
+  plain Pydantic `BaseModel`. Which *kind* of dataclass, and its fields, are under Open.
+- **Why:** it follows D-013 (dataclasses inside the graph) and must be allowlisted (D-014).
+
+### D-041 — Only papers with a valid arXiv ID are kept, checked by Pydantic field validators
+- **Decision:** paper IDs are validated with Pydantic `field_validator`s when arXiv data is
+  parsed. An entry without a valid arXiv ID never becomes a `Source`.
+- **Why:** the paper ID is how everything else refers to a paper: dedup and paper
+  overlap (D-022), `seen_paper_ids`, and citations. A malformed ID has to be stopped where the data
+  comes in (D-013).
+- **Valid formats** (arXiv identifier docs): new scheme `YYMM.NNNN` (0704–1412) or
+  `YYMM.NNNNN` (from 1501), optional `vN`; old scheme (before April 2007)
+  `archive[.XX]/YYMMNNN`, e.g. `hep-th/9901001`, `math.GT/0309136`. The API
+  returns the ID as a URL with a version, e.g. `<id>http://arxiv.org/abs/1706.03762v7</id>`
+  (confirmed with a real request).
+- **Not covered:** this checks an ID's *format*. It doesn't check that a citation in the review
+  points to a paper that was actually retrieved; see Open → "Citation grounding".
+
+### D-042 — The arXiv API is called with `httpx`
+- **Decision:** call the arXiv API directly with `httpx`, not the `arxiv` package.
+- **Why:** it keeps D-027's exception list correct (`httpx.TransportError`,
+  `httpx.HTTPStatusError`), and every request is visible and testable.
+- **Facts (confirmed 2026-09-16):** `https://export.arxiv.org/api/query` works over HTTPS
+  (status 200, `application/atom+xml`). Terms of use: "no more than one request every three
+  seconds" and "a single connection at a time". Metadata may be stored and shared (CC0), but not
+  e-prints (PDFs).
+
+### D-043 — `Source` is a frozen Pydantic dataclass (refines D-040)
+- **Decision:** `@pydantic.dataclasses.dataclass(frozen=True)` with `field_validator`s. It's a
+  single type that is both the validated boundary record (D-041) and the dataclass stored in state (D-040).
+- **Why (confirmed on langgraph 1.2.11 / pydantic 2.13.5):** it's a real dataclass
+  (`dataclasses.is_dataclass` → `True`), and invalid data raises `ValidationError` (a `ValueError`).
+  After a checkpoint round trip it comes back as `Source` with `tuple` fields still `tuple`s, because
+  validation runs again on restore. `frozen=True` makes it immutable and hashable, so it can go in sets.
+- **Rejected:** a Pydantic `BaseModel` for parsing plus a plain `@dataclass` for state (two types
+  and a conversion function, and the plain dataclass's `tuple` fields come back as `list`s after a
+  checkpoint, which breaks hashing); a plain dataclass validated in `__post_init__` (validation
+  written by hand).
+- **Reminder:** add `Source` to `allowed_msgpack_modules` (D-014).
+
+### D-044 — `Source` fields and the canonical arXiv ID
+- **Decision:** `arxiv_id: str` (canonical, **no version**), `version: int`, `title: str`,
+  `authors: tuple[str, ...]`, `summary: str`, `published: datetime`, `url: str` (the abstract page).
+  `arxiv_id` is derived from the feed's `<id>` (e.g. `http://arxiv.org/abs/1706.03762v7`) by
+  stripping the `http://arxiv.org/abs/` prefix and the `vN` suffix; `N` becomes `version`.
+- **Why:** dedup, paper overlap (D-022), `seen_paper_ids` and citations all need one stable ID
+  per paper. A new version of the same paper mustn't count as a different paper.
+
+### D-045 — Invalid entries are skipped and counted; only a broken feed fails the search
+- **Decision:** an entry that fails validation is skipped and counted, and the valid ones are kept.
+  The whole search fails only when the feed can't be parsed or is arXiv's error feed (a single
+  entry titled "Error", per the API manual).
+- **Why:** one malformed entry shouldn't throw away a page of good results, but the skipped
+  count stays visible. A broken feed means there's no data to work with, so it counts as a failed
+  search (D-018/D-020).
+
+### D-046 — Citation grounding happens in its own node
+- **Decision:** `synthesize` writes prose with inline markers in the form `[arXiv:<arxiv_id>]`.
+  A separate node after it extracts every marker and validates each ID with a Pydantic model given
+  `context={"known_ids": <retrieved IDs>}`, then records any unknown IDs in state. Graph:
+  `… → synthesize → <citation check> → END`.
+- **Why:** the review still streams as readable prose (milestone 5). The check is deterministic
+  and testable, and a violation becomes data the report can show. Checking the format alone (D-041)
+  would accept a well-formed ID the model invented. Validation context works as intended (confirmed:
+  an ID outside `known_ids` is rejected with "not a retrieved paper").
+- **Rejected:** structured output validated against the retrieved IDs (token streaming would
+  stream JSON instead of prose); checking inside `synthesize` (mixes generating and checking in one node,
+  and hides violations from state).
+- **Consequence:** the milestone 2 system prompt must require the exact marker format.
+
+### D-047 — Parse arXiv XML with `defusedxml`, with `forbid_dtd=True`
+- **Decision:** parse with `defusedxml.ElementTree.fromstring(..., forbid_dtd=True)`. Add
+  `defusedxml` as a dependency when milestone 2 starts.
+- **Why:** the Python docs say expat versions below 2.7.2 "may be vulnerable" to billion-laughs,
+  quadratic-blowup and large-token attacks, and this environment has expat 2.7.1. Confirmed on
+  defusedxml 0.7.1: by default it rejects entities and external references (`EntitiesForbidden`)
+  but still accepts a plain DOCTYPE; `forbid_dtd=True` rejects that too (`DTDForbidden`). A real
+  arXiv feed has neither.
+- **Rejected:** stdlib `xml.etree.ElementTree` (no protection beyond expat's);
+  `feedparser` (never raises on malformed input, which goes against fail-fast).
+
+### D-048 — The worker catch list includes XML failures (extends D-027)
+- **Decision:** the worker catches `(httpx.TransportError, httpx.HTTPStatusError,
+  pydantic.ValidationError, xml.etree.ElementTree.ParseError, defusedxml.DefusedXmlException)`.
+- **Why:** both new exceptions come from broken or unexpected external data, not from bugs.
+  D-027's list catches neither (confirmed): truncated XML raises
+  `xml.etree.ElementTree.ParseError`, which is **not** a `ValueError`; `DefusedXmlException` **is** a
+  `ValueError` but not a `ValidationError`.
+
+### D-049 — An `httpx.AsyncClient` is passed into `build_graph`
+- **Decision:** `build_graph` takes an `httpx.AsyncClient`, just as it takes the model factory
+  and checkpointer (D-032). Whoever calls `build_graph` owns the client's lifetime.
+- **Why:** tests pass a client built on `httpx.MockTransport` (available in httpx 0.28.1)
+  that serves saved arXiv responses, so they're deterministic and need no network. The web layer
+  opens one client at startup and closes it at shutdown.
+- **Rejected:** creating a client inside the search function (no shared connection, and tests
+  need monkeypatching); a module-level client (unclear lifetime, and it can end up tied to the wrong
+  event loop across tests).
+
+### D-050 — A checkpoint round-trip test for `Source`
+- **Decision:** a test saves state holding a `Source` through a checkpointer configured with the
+  real serializer settings (allowlist included), loads it back, and asserts the value is still a
+  `Source` with `tuple` fields.
+- **Why:** a type that isn't allowlisted comes back as a plain `dict` with no error (D-014
+  correction). Without this test, a missing allowlist entry would only show up as an
+  `AttributeError` somewhere far away.
+
 ## Open (proposed, not decided)
 
 - **A public entry function.** Revisit at the web-layer milestone: a wrapper that
@@ -304,14 +419,12 @@ and what was rejected. It's the answer to "why did you do it this way?"
   external failures and re-raise other 4xx.
 - **Making failures visible.** Proposed: a `custom` stream event, plus a coverage
   limitations section in the review listing failed and zero-result subtopics.
-- **Prompt-injection defenses.** Proposed: citation IDs restricted to the
-  retrieved set through Pydantic validation context; no tools with side effects;
-  untrusted text in delimited data sections; sanitize LLM output before
-  it's rendered.
+- **Prompt-injection defenses.** Citation IDs restricted to the retrieved set are decided
+  (D-046). Still proposed: no tools with side effects; untrusted text in delimited data
+  sections; sanitize LLM output before it's rendered.
 - **arXiv rate limit** (≤1 request every 3 s) under parallel `Send`: where the
   limiter lives.
 - **`recursion_limit` value.** `max_depth` is set (D-025); the backstop value
   isn't.
-- **Shape of the citation / `Source` object.**
 - **Frontend: SvelteKit or htmx** (at the web-layer milestone; if SvelteKit, add
   `node_modules/`, `.svelte-kit/` and the build output folder to `.gitignore`).

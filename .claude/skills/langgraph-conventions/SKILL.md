@@ -13,12 +13,18 @@ description: This project's LangGraph implementation patterns — state schema s
   that receives it. Reason: when the state itself is Pydantic, LangGraph only
   validates the input to the *first* node, so validation has to happen at
   each boundary on purpose.
+- **`Source` is the exception to the two-type split:** it's a single
+  `@pydantic.dataclasses.dataclass(frozen=True)`, validated when it's built from
+  arXiv data *and* stored in state (D-043). Fields: `arxiv_id` (no version),
+  `version`, `title`, `authors: tuple[str, ...]`, `summary`, `published: datetime`, `url` (D-044).
+  Entries that fail validation are skipped and counted (D-045).
 - **Allowlist every custom type that ends up in state.** With
   `LANGGRAPH_STRICT_MSGPACK` / `allowed_msgpack_modules`, a checkpoint can
   only deserialize custom Pydantic models and dataclasses that are
-  explicitly allowlisted. Anything missing from the list breaks resuming a
-  run from SQLite. When you add a model to state, add it to the allowlist
-  in the same change.
+  explicitly allowlisted. A type missing from the list does **not** raise an error: it
+  comes back as a plain `dict` with only a logged warning, and the next attribute
+  access fails far from the cause (confirmed on langgraph 1.2.11; D-014). When you
+  add a model to state, add it to the allowlist in the same change.
 - A key needs an explicit reducer (e.g. `Annotated[list[str], operator.add]`)
   in two cases:
   1. **More than one node writes it in the same step.** This means parallel `Send` branches
@@ -31,8 +37,11 @@ description: This project's LangGraph implementation patterns — state schema s
 - **Run context:** calling the graph without `context=` makes `runtime.context`
   `None`, and `Literal` hints aren't checked at runtime. `intake` raises
   `ValueError` if the context is missing or the provider is invalid (D-033).
-- **Dependencies:** `build_graph(model_factory, checkpointer)`. Nodes never
-  construct their own model client or checkpointer (D-032).
+- **Dependencies:** `build_graph` receives the model factory, the checkpointer and an
+  `httpx.AsyncClient`. Nodes never construct their own model client, HTTP client or
+  checkpointer (D-032, D-049). Tests pass an `httpx.MockTransport`-backed client.
+- **Checkpoint round trip:** every custom type in state gets a test that saves it through
+  the real serializer settings and asserts it comes back as the same type (D-050).
 
 ## Subtopic bookkeeping
 
@@ -55,8 +64,10 @@ description: This project's LangGraph implementation patterns — state schema s
   when there are ≥ 3 results (D-028), and zero results never reach it. Pass `seen_paper_ids` in the `Send` payload, and give it a
   deduplicating reducer.
 - The worker catches exactly
-  `(httpx.TransportError, httpx.HTTPStatusError, pydantic.ValidationError)`
-  (D-023, D-027). Never catch `BaseException`, let programming errors crash,
+  `(httpx.TransportError, httpx.HTTPStatusError, pydantic.ValidationError,
+  xml.etree.ElementTree.ParseError, defusedxml.DefusedXmlException)`
+  (D-023, D-027, D-048). arXiv XML is parsed with
+  `defusedxml.ElementTree.fromstring(..., forbid_dtd=True)` (D-047). Never catch `BaseException`, let programming errors crash,
   and add no backoff around LLM calls, since the OpenAI client already retries. N counts
   failed worker runs, not HTTP retries (D-024).
 - `depth` is 0-indexed. Recurse while `depth < max_depth`. With `max_depth = 2`,
@@ -80,8 +91,9 @@ from langgraph.types import Send
 
 def route_subtopics(state: ResearchState) -> list[Send]:
     return [
-        Send("research_worker", {"subtopic": t})
-        for t in state["pending_subtopics"]
+        # A worker only sees its Send payload, so pass what it needs (D-022).
+        Send("research_worker", {"subtopic": t, "seen_paper_ids": state.seen_paper_ids})
+        for t in state.pending_subtopics  # state is a dataclass: attribute access
     ]
 ```
 
@@ -102,9 +114,18 @@ Two layers, not one:
 
 ## Citation grounding
 
-No claim in the synthesized report without a source object it came from
-still attached in state. **TODO**: fill in the exact source-tracking shape
-once decided (e.g. a `Source` dataclass carried alongside each finding).
+No claim in the synthesized report without a `Source` it came from still in
+state (D-046):
+
+1. `synthesize` writes prose with inline markers in exactly this form:
+   `[arXiv:<arxiv_id>]`, using the versionless ID (D-044). The system prompt
+   has to require that format.
+2. A separate node after `synthesize` extracts every marker and validates
+   each ID with a Pydantic model given `context={"known_ids": <retrieved IDs>}`
+   (the `field_validator` reads `info.context`). Unknown IDs are recorded in
+   state, not silently dropped.
+3. Checking the format (D-041) is not grounding: a well-formed ID the model
+   invented passes a format check but must fail step 2.
 
 ## Reference implementations
 

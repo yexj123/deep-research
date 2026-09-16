@@ -5,7 +5,6 @@
     "ask": [
       "Edit",
       "Write",
-      "MultiEdit",
       "NotebookEdit"
     ],
     "allow": [

@@ -9,8 +9,8 @@ lives in [`decisions.md`](decisions.md); this file only tracks status.
 
 ## Do next (you)
 
-- [ ] **`.claude/settings.json` has an uncommitted change nobody reviewed:** `"MultiEdit"` in
-      the `ask` list became a second `"Edit"`. Decide whether to keep it, then commit or revert it.
+- [x] `.claude/settings.json`: removed `"MultiEdit"`, since Claude Code reported it "matches no known tool"
+      (duplicate `"Edit"` also removed; `CLAUDE.md` and the output style updated to match)
 - [ ] **Fully quit and reopen VS Code once.** Claude Code gets its environment from
       VS Code, and it needs the new `UV_CACHE_DIR=E:\uv-cache` variable.
 - [ ] *(Optional)* Delete the old 55 MB uv cache on C::
@@ -21,7 +21,7 @@ lives in [`decisions.md`](decisions.md); this file only tracks status.
 
 | # | Milestone | Open decisions to settle first (see `decisions.md` → Open) |
 |---|---|---|
-| 2 | One real source (arXiv), single subtopic, citation shape | `Source` object shape · prompt-injection defenses (citation IDs restricted to the retrieved set) · arXiv client: `httpx` directly or the `arxiv` package (affects D-027's exception list) |
+| 2 | One real source (arXiv), single subtopic, citation shape | **All decided (D-040 – D-050).** Next: plan the milestone 2 code (files, tests, saved arXiv responses for `MockTransport`) |
 | 3 | `decompose` + `Send` fan-out, reducers | arXiv rate limiter (≤1 req / 3 s) · models per role · treating HTTP 4xx and 5xx differently |
 | 4 | `gap_check` + depth recursion, retry cap, paper overlap | making failures visible · `recursion_limit` value |
 | 5 | Web layer: FastAPI + SSE + `AsyncSqliteSaver` | frontend (SvelteKit or htmx) · public entry function |
@@ -30,7 +30,9 @@ lives in [`decisions.md`](decisions.md); this file only tracks status.
 - **Milestone 2 onward:** add every custom Pydantic model or dataclass stored in state to
   `allowed_msgpack_modules` (D-014).
 - **Milestone 2:** replace the milestone 1 `SYSTEM_PROMPT` in `nodes/synthesize.py`. The new one
-  must cite retrieved sources.
+  must cite retrieved sources using exactly `[arXiv:<arxiv_id>]` (D-046).
+- **Milestone 2:** `uv add defusedxml` (D-047); add `Source` to `allowed_msgpack_modules` (D-014)
+  and write its checkpoint round-trip test (D-050).
 - **Milestone 3:** capture what `updates` chunks look like when several `Send` workers finish
   in the same step (`docs/langgraph-outputs.md` §4).
 - **Milestone 5:** if you choose SvelteKit, add `node_modules/`, `.svelte-kit/` and the build output

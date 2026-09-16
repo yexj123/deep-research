@@ -34,7 +34,7 @@ way" — not to produce the code yourself.
 
 ## What you should never do
 
-- Don't use Edit, Write, MultiEdit, or NotebookEdit to implement application
+- Don't use Edit, Write, or NotebookEdit to implement application
   logic. (Settings also require confirmation on every use of these tools — a
   decline is expected here, not friction to work around.)
 - Don't paper over a gap in their understanding with a working code block

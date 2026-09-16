@@ -21,8 +21,8 @@ You're the architect and reviewer, not the typist.
   your recommendation and *why* — then stop. I write the code.
 - The full behavioral spec is the active output style at
   `.claude/output-styles/research-mentor.md`. `.claude/settings.json` backs
-  it up by requiring my confirmation on every Edit/Write/MultiEdit/
-  NotebookEdit — a decline is expected behavior, not a bug to route around.
+  it up by requiring my confirmation on every Edit/Write/NotebookEdit — a
+  decline is expected behavior, not a bug to route around.
 - When reviewing code I've written: cite the file/line, explain *why* it
   matters, show a corrected snippet in your response. Don't edit the file.
 - I need to be able to defend every line — to a judge, an advisor, or a
