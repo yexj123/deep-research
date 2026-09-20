@@ -3,7 +3,12 @@
 What's done, what's next, and whose job each item is. Design reasoning
 lives in [`decisions.md`](decisions.md); this file only tracks status.
 
-**Last updated:** 2026-09-16 · **Current milestone:** 2 (one real source: arXiv)
+**Last updated:** 2026-09-20 · **Current milestone:** 2 (one real source: arXiv)
+
+**Who writes what:** you write the implementation (`src/`); Claude writes every test
+(since 2026-09-19) and keeps the docs (since 2026-09-20) — `docs/*.md` and the README.
+Backed by `CLAUDE.md`, the output style, and `Edit(/tests/**)`, `Edit(/docs/**)`,
+`Edit(/README.md)` in `.claude/settings.json`.
 
 ---
 
@@ -11,28 +16,108 @@ lives in [`decisions.md`](decisions.md); this file only tracks status.
 
 - [x] `.claude/settings.json`: removed `"MultiEdit"`, since Claude Code reported it "matches no known tool"
       (duplicate `"Edit"` also removed; `CLAUDE.md` and the output style updated to match; commit `532473d`)
-- [ ] **Fully quit and reopen VS Code once.** Claude Code gets its environment from
-      VS Code, and it needs the new `UV_CACHE_DIR=E:\uv-cache` variable.
+- [x] **Fully quit and reopen VS Code once** for `UV_CACHE_DIR=E:\uv-cache` (the variable is set in the environment)
 - [ ] *(Optional)* Delete the old 55 MB uv cache on C::
       `uv cache clean --cache-dir "$env:LOCALAPPDATA\uv\cache"`
-- [ ] **Before writing milestone 2 code**, settle its open decisions (table below).
+- [x] **Review the milestone 2 code** — walked through on 2026-09-20 (see "Review outcome" below).
+      "No papers found" confirmed as D-060; two findings became D-061 and D-062
+- [x] **Apply the three review fixes** — `extra="forbid"` on `Source` (D-061), the corrected
+      `arxiv.py` comment, and `CITATION_BRACKET` in `check_citations.py` (D-062)
+- [x] Run `uv run pytest` → **66 passed, 1 deselected**
+- [x] Run the integration test → **1 passed** (2026-09-20, see below)
+- [ ] Two comment fixes left in `check_citations.py` from the review: the module docstring still
+      describes the pre-D-062 node, and `CITATION_BRACKET` has no comment explaining why two
+      regexes exist — the least self-evident line in the milestone
+- [ ] Commit, then record the hash here
+
+## Milestone 2: one real source, arXiv
+
+**Goal:** `intake → search → synthesize → check_citations`. The question is searched on arXiv,
+the review cites only retrieved papers, and a `Source` survives a checkpoint.
+
+**Status (2026-09-20):** reviewed, fixed, green — **ready to commit**. `uv run pytest`:
+**66 passed, 1 deselected**. `uv run pytest -m integration`: **1 passed** in 11.17s against the real
+OpenAI API and the real arXiv API.
+
+**What the integration run proved (2026-09-20, `gpt-4o`):** arXiv returned papers for
+"What is attention in transformer models?"; the review streamed in more than one `messages` chunk;
+the joined stream matched the saved `review` exactly; at least one `[arXiv:<id>]` citation was
+present; and `citation_violations == []`. The version-suffix failure predicted during review
+(`[arXiv:2411.18583v1]`, which D-044 correctly counts as a violation) did **not** occur — the model
+followed the marker format. Caveat worth stating in any write-up: that is **one** run. It shows
+prompt adherence is achievable, not that it's reliable; measuring how often it holds is
+`notebooks/` work for the thesis, not a unit test.
+
+**Design:** D-040 – D-062. How the files relate is explained in [`code-map.md`](code-map.md).
+
+### Review outcome (2026-09-20)
+
+The 09-19 code was walked through file by file. Three things came out of it:
+
+- **D-060** — "No papers found" confirmed as written and moved out of **Open**. Carries a
+  milestone-5 consequence: that run streams nothing in `messages` mode.
+- **D-061** — `Source` silently ignored unknown fields. Verified: `Source(**valid, abstract="x")`
+  constructed fine and dropped `abstract`. Fail-fast hole at the parsing boundary; fixed with
+  `extra="forbid"`.
+- **D-062** — **the significant one.** `[arXiv:A, B]` and `[arXiv: A]` extracted *nothing*, so a
+  review citing only in those forms reported `citation_violations == []` — identical to a fully
+  grounded review. A false negative in the project's headline feature. `check_citations` now finds
+  every `[arXiv:...]` bracket and records the ones it can't parse.
+
+Reviewed and deliberately left alone: the bare `except ValueError` in `parse_feed`. It does catch
+caller bugs alongside bad data, but `test_arxiv.py`'s `skipped == 0` assertion on the real fixture
+is an adequate guard, and error-type introspection would couple production code to Pydantic
+internals. Only the misleading comment was corrected.
+
+Raised to **Open**, not fixed: `build_search_query` destroys non-ASCII terms
+("Schrödinger" → `all:schr AND all:dinger`), which yields zero results and is recorded as a success.
+
+**Written by Claude on 2026-09-19** (at your request: "complete what's left"). Reviewed 2026-09-20 —
+outcome above. Kept here as the record of what wasn't yours:
+- Fixes to your code:
+  - `state.py` (field names and types, `default_factory`);
+  - `config.py` (removed the copies of `arxiv.py` constants; added D-052's settings);
+  - `models.py` (the ID pattern, D-056);
+  - `arxiv.py` (`entry_to_source` passed `id=`/`abstract=`, so every entry was silently skipped; the
+    link fallback that could pick the PDF was removed; `parse_feed` returns a tuple);
+  - `check_citations.py` (`source.arxiv_id`; missing context raises `RuntimeError`, because an `assert`
+    in a validator becomes a `ValidationError` and would record every citation as a violation);
+  - `graph.py` (argument order `model_factory, http_client, checkpointer`; direct `httpx` import).
+- New code: the `synthesize.py` prompt, `format_papers` and `NO_SOURCES_REVIEW` (D-046, D-055, D-060).
+- Tests: every stub filled in, plus tests for D-058, D-059, the missing-context `RuntimeError`, the
+  empty-search path, a failed search, and a control for the round-trip test. The `checkpointer`
+  fixture now uses `build_serializer()`.
+
+**Order:**
+- [x] 1. `state.py` fields · `persistence/checkpointer.py`
+- [x] 2. `models.py` → `test_source_model.py` green
+- [x] 3. `arxiv.py` (`split_versioned_id` → `entry_to_source` → `parse_feed` → `search_arxiv`) → `test_arxiv.py` green
+- [x] 4. `check_citations.py` → `test_check_citations.py` green
+- [x] 5. `build_search_query` + arXiv settings + `search.py`
+- [x] 6. `synthesize.py` prompt + `graph.py` wiring → update `test_graph.py`; write `test_checkpoint_roundtrip.py`
+- [x] 7. Reviewed (2026-09-20) → D-060, D-061, D-062; tests for the last two written and red
+- [x] 8. Applied the three `src/` fixes → `uv run pytest`: **66 passed, 1 deselected**
+- [x] 9. Integration test run 2026-09-20 → **1 passed** in 11.17s, first attempt
+- [ ] 10. Commit, then record the hash here
 
 ## Upcoming milestones
 
 | # | Milestone | Open decisions to settle first (see `decisions.md` → Open) |
 |---|---|---|
-| 2 | One real source (arXiv), single subtopic, citation shape | **All decided (D-040 – D-050, commit `532473d`).** Next: plan the milestone 2 code (files, tests, saved arXiv responses for `MockTransport`) |
+| 2 | One real source (arXiv), single subtopic, citation shape | **Done, ready to commit**: see the Milestone 2 section above (D-040 – D-062) |
 | 3 | `decompose` + `Send` fan-out, reducers | arXiv rate limiter (≤1 req / 3 s) · models per role · treating HTTP 4xx and 5xx differently |
 | 4 | `gap_check` + depth recursion, retry cap, paper overlap | making failures visible · `recursion_limit` value |
 | 5 | Web layer: FastAPI + SSE + `AsyncSqliteSaver` | frontend (SvelteKit or htmx) · public entry function |
 
 **Reminders for when these come up:**
 - **Milestone 2 onward:** add every custom Pydantic model or dataclass stored in state to
-  `allowed_msgpack_modules` (D-014).
-- **Milestone 2:** replace the milestone 1 `SYSTEM_PROMPT` in `nodes/synthesize.py`. The new one
-  must cite retrieved sources using exactly `[arXiv:<arxiv_id>]` (D-046).
-- **Milestone 2:** `uv add defusedxml` (D-047); add `Source` to `allowed_msgpack_modules` (D-014)
-  and write its checkpoint round-trip test (D-050).
+  `allowed_msgpack_modules` (D-014), with a round-trip test (D-050).
+- **Milestone 5:** a zero-result run streams **nothing** in `messages` mode, because D-060 returns
+  `NO_SOURCES_REVIEW` without calling a model. The review arrives only in the `synthesize` `updates`
+  chunk, so the SSE layer must render a review that never produced a token — otherwise an empty
+  search looks like a hung UI.
+- **Milestone 3:** `ValueError` from `build_search_query` isn't on the worker catch list (D-059).
+  Decide whether a subtopic with no terms counts as a failed subtopic.
 - **Milestone 3:** capture what `updates` chunks look like when several `Send` workers finish
   in the same step (`docs/langgraph-outputs.md` §4).
 - **Milestone 5:** if you choose SvelteKit, add `node_modules/`, `.svelte-kit/` and the build output

@@ -41,7 +41,13 @@ description: This project's LangGraph implementation patterns — state schema s
   `httpx.AsyncClient`. Nodes never construct their own model client, HTTP client or
   checkpointer (D-032, D-049). Tests pass an `httpx.MockTransport`-backed client.
 - **Checkpoint round trip:** every custom type in state gets a test that saves it through
-  the real serializer settings and asserts it comes back as the same type (D-050).
+  the real serializer settings and asserts it comes back as the same type (D-050). The allowlist
+  in `persistence/checkpointer.py` builds each entry from the class itself (D-057), so a move or
+  rename is picked up; the test is what catches a new type that was never added. The `checkpointer`
+  test fixture uses `build_serializer()`, so every graph test restores state the way production does.
+- **Milestone 2 names (D-054):** nodes `intake → search → synthesize → check_citations`; state fields
+  `sources`, `skipped_entries`, `citation_violations`. At milestone 2 the `search` node catches
+  nothing (D-053). Retrieved papers reach the model as a delimited data block (D-055).
 
 ## Subtopic bookkeeping
 
@@ -126,6 +132,17 @@ state (D-046):
    state, not silently dropped.
 3. Checking the format (D-041) is not grounding: a well-formed ID the model
    invented passes a format check but must fail step 2.
+4. **Find citation *attempts*, not just citations (D-062).** Match every
+   `[arXiv:...]` bracket with a permissive pattern, then try to parse each one
+   with the strict marker. A bracket that won't parse — `[arXiv:A, B]`,
+   `[arXiv: A]` — is recorded verbatim as a violation. Extracting only what the
+   strict pattern matches makes an unreadable citation indistinguishable from no
+   citation, so a review full of malformed markers reports zero violations. Never
+   let "I couldn't read it" render as "I verified it".
+5. Missing validation context must raise `RuntimeError`, not `ValueError` or an
+   `assert`: Pydantic converts the latter two into `ValidationError`, which the
+   node records as a violation — so a caller bug would mark *every* citation
+   ungrounded instead of crashing.
 
 ## Reference implementations
 

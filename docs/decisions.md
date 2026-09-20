@@ -406,6 +406,141 @@ and what was rejected. It's the answer to "why did you do it this way?"
   correction). Without this test, a missing allowlist entry would only show up as an
   `AttributeError` somewhere far away.
 
+### D-051 — Milestone 2 builds the arXiv query from key terms
+- **Decision:** `build_search_query` strips punctuation and arXiv query syntax characters, drops
+  stopwords, and joins the remaining terms as `all:<term> AND all:<term> …`. Deterministic, no LLM call.
+- **Why:** measured 2026-09-16, the raw question (`all:What is attention in transformer models?`)
+  matched 327,597 papers, while `all:attention AND all:transformer AND all:models` matched 14,338
+  more relevant ones. Removing syntax characters also stops a question containing `:`, `"` or
+  parentheses from breaking the query.
+- **Rejected:** the raw question (very noisy); an LLM rewriting the question (an extra paid call, and
+  the milestone 3 planner will write queries anyway).
+- **Known limit:** a long question can AND together enough terms to return zero results, which
+  counts as a success (D-021).
+
+### D-052 — arXiv settings: 10 results, 30 s client timeout
+- **Decision:** `ARXIV_MAX_RESULTS = 10` and `ARXIV_TIMEOUT_SECONDS = 30.0` in `agent/config.py`.
+  The timeout is applied when the `httpx.AsyncClient` is created, by whoever creates it (D-049).
+
+### D-053 — At milestone 2, a failed search fails the run
+- **Decision:** the `search` node catches nothing. Catching and recording failures (D-019, D-048)
+  arrives with the parallel workers at milestone 3, and `ArxivAPIError` joins D-048's catch list then.
+- **Why:** with a single search there's nothing to continue with after a failure, so recording it
+  would just hide it. Failing loudly is the honest behavior here.
+
+### D-054 — Milestone 2 layout and names
+- **Decision:**
+  - `Source` lives in `agent/sources/models.py`, so its allowlist entry is
+    `("deep_research.agent.sources.models", "Source")`;
+  - the arXiv client and parser live in `agent/sources/arxiv.py`;
+  - the serializer settings live in `persistence/checkpointer.py`;
+  - the new nodes are named `search` and `check_citations`;
+  - the new `ResearchState` fields are `sources: list[Source]`, `skipped_entries: int` and
+    `citation_violations: list[str]`.
+- **Why:** each source client gets its own module under `sources/`, and the serializer is shared by
+  tests now and the web layer later (milestone 5).
+
+### D-055 — Retrieved papers go into the prompt as a delimited data block
+- **Decision:** `synthesize` passes the retrieved papers in the human message as a clearly delimited
+  block (ID, title, summary per paper). The system prompt says that block is data, not instructions.
+- **Why:** paper abstracts are untrusted third-party text. This is the first concrete step on
+  "Prompt-injection defenses" (still Open for the rest).
+
+### D-056 — arXiv IDs use the simple digit rule
+- **Decision:** a new-scheme ID has 4 or 5 digits after the dot for any YYMM.
+- **Why:** it's simple and enough for the tests. **Rejected:** tying the digit count to YYMM (4 digits for
+  0704–1412, 5 from 1501), which is more exact but adds complexity for little gain.
+
+## 2026-09-19
+
+### D-057 — The allowlist entry is built from the class (refines D-054)
+- **Decision:** `ALLOWED_MSGPACK_MODULES` holds `(Source.__module__, Source.__name__)`, so
+  `persistence/checkpointer.py` imports `Source`. The value is still
+  `("deep_research.agent.sources.models", "Source")`.
+- **Why:** an entry typed as strings goes stale silently when `Source` moves or is renamed. One
+  built from the class follows it. It matches what the serializer records (confirmed in langgraph
+  1.2.11 `jsonplus.py`: `(obj.__class__.__module__, obj.__class__.__name__, …)`).
+- **Cost:** `persistence` now imports from `agent.sources`. There's no cycle, because `models.py`
+  imports nothing from the project.
+- **Still needed:** the round-trip test (D-050). It's what catches a *new* state type that was never
+  added.
+
+### D-058 — More reasons an entry is skipped: version, title, authors, abstract link
+- **Decision:** besides the ID (D-041), an entry is skipped and counted (D-045) when:
+  - `version < 1` (`Source` validator);
+  - the title is empty after whitespace is collapsed (`Source` validator; runs of whitespace
+    become one space);
+  - there are no author names (`entry_to_source`);
+  - there's no `<link rel="alternate">` (`entry_to_source`). There's no fallback to another link.
+- **Why:** a paper with no title or authors is useless in the prompt and the report, and arXiv
+  numbers versions from 1. In a real entry the next link is the PDF (`rel="related"`), so "fall back
+  to any link" would store the PDF as the abstract page.
+- **Alternative (not taken):** `Annotated[int, Field(ge=1)]` for the version, which has the same effect.
+
+### D-059 — `build_search_query` raises `ValueError` when no terms are left
+- **Decision:** a question made only of stopwords and punctuation (e.g. "What is it?") raises
+  `ValueError`, which fails the run at milestone 2 (D-053).
+- **Why:** arXiv would otherwise receive an empty query. Failing loudly names the cause.
+- **Consequence at milestone 3:** `ValueError` isn't on D-048's catch list, so a planner subtopic with
+  no terms would crash the whole run instead of counting as a failed subtopic. Revisit then.
+- **Known limit:** `PUNCTUATION_PATTERN` (`[^a-zA-Z0-9\s]`) treats non-ASCII letters as punctuation,
+  so "Schrödinger" becomes `all:schr AND all:dinger`.
+
+## 2026-09-20
+
+### D-060 — No papers found: a fixed review, with no model call
+- **Decision:** when `sources` is empty, `synthesize` returns the fixed `NO_SOURCES_REVIEW` string
+  and never builds or calls a model. Promotes the behavior implemented provisionally on 2026-09-19.
+- **Why:** it costs nothing, and more importantly there is no model output that could invent a
+  citation or answer the question from general knowledge. Zero results is a success (D-021), so this
+  is the success path for "nothing published on X" — a finding the review should state plainly.
+- **Rejected:** calling the model with an empty `<papers>` block and prompting it to report that
+  nothing was found. That is a paid call whose correctness depends on the model obeying the prompt,
+  to produce a sentence we can write ourselves.
+- **Consequence (carry to milestone 5):** this run streams **nothing** in `messages` mode, because no
+  model is invoked. The review arrives only in the `synthesize` `updates` chunk. The SSE layer must
+  render a review that never produced a token, or the UI will look hung on an empty search.
+
+### D-061 — `Source` forbids unknown fields (refines D-043)
+- **Decision:** `Source` is declared `@dataclass(frozen=True, config=ConfigDict(extra="forbid"))`.
+- **Why:** Pydantic dataclasses default to `extra="ignore"`. Verified 2026-09-20:
+  `Source(**valid_fields, abstract="x")` constructed successfully and silently discarded `abstract`.
+  A typo'd or stale field name was therefore accepted in silence whenever the required fields
+  happened to also be present. That breaks fail-fast (D-023) at the parsing boundary, which is
+  exactly where D-013 puts validation. The 2026-09-19 `id=`/`abstract=` bug was caught only because
+  the typo *also* removed a required field, producing a `missing` error — luck, not design.
+- **Effect:** an unknown keyword now raises `ValidationError` with type `unexpected_keyword_argument`
+  and the offending name in `loc`. `parse_feed` still counts it as a skipped entry (D-045); what
+  changes is that the error names the wrong field, and `test_arxiv.py`'s `skipped == 0` assertion
+  turns it into a red test instead of a silent zero-result search.
+- **Rejected:** inspecting `ValidationError.errors()[*]["type"]` inside `parse_feed` to re-raise
+  caller bugs (`missing`) while skipping bad data (`value_error`). It couples production code to
+  Pydantic's internal error-type strings to defend against something the test suite already catches.
+- **Tested:** `test_unknown_field_is_rejected` and `test_unknown_field_error_names_the_offending_field`.
+  Both fail with `DID NOT RAISE` against the pre-fix code (confirmed 2026-09-20).
+
+### D-062 — An unparseable citation marker is a violation (closes an Open item)
+- **Decision:** `check_citations` matches every `[arXiv:...]` bracket with `CITATION_BRACKET`, then
+  tries to parse each one with `CITATION_MARKER`. A bracket that doesn't parse is recorded in
+  `citation_violations` verbatim, e.g. `"[arXiv:A, B]"`. Promotes the Open item "Citations the check
+  can't see".
+- **Why:** verified 2026-09-20 against the node — `[arXiv:A, B]` and `[arXiv: A]` extracted
+  *nothing*, so a review citing only in those forms returned `citation_violations == []`, the same
+  result as a perfectly grounded review. That is a false negative in the feature the whole project
+  is built on: an unreadable citation must never be indistinguishable from a verified one. The
+  prompt forbids both forms, but relying on that is relying on model compliance — the exact
+  dependency D-046 built a deterministic checker to remove.
+- **Consequence:** `citation_violations` now means "every citation that could not be verified", not
+  "well-formed IDs that weren't retrieved". Malformed entries are recognizable by their brackets.
+  `state.py` and `code-map.md` are updated to match.
+- **Rejected:** parsing grouped IDs (`[arXiv:A, B]`) into separate citations and validating each. It
+  would silently accept a format the prompt forbids, so the prompt and the checker would drift
+  apart; flagging it keeps one canonical form.
+- **Known limit (tested):** a citation with no brackets at all, e.g. a bare `arXiv:1706.03762` in
+  prose, is still not detected — `arXiv:` occurs in ordinary text, so matching it unbracketed would
+  produce false positives. `test_known_limit_citation_without_brackets_is_invisible` marks that
+  boundary.
+
 ## Open (proposed, not decided)
 
 - **A public entry function.** Revisit at the web-layer milestone: a wrapper that
@@ -419,9 +554,20 @@ and what was rejected. It's the answer to "why did you do it this way?"
   external failures and re-raise other 4xx.
 - **Making failures visible.** Proposed: a `custom` stream event, plus a coverage
   limitations section in the review listing failed and zero-result subtopics.
-- **Prompt-injection defenses.** Citation IDs restricted to the retrieved set are decided
-  (D-046). Still proposed: no tools with side effects; untrusted text in delimited data
-  sections; sanitize LLM output before it's rendered.
+- **Prompt-injection defenses.** Decided so far: citation IDs restricted to the retrieved set
+  (D-046); a citation the checker can't parse is reported rather than ignored, so a malformed
+  marker can't pass as grounded (D-062); retrieved papers passed as a delimited data block
+  (D-055). Still proposed: no tools with
+  side effects; sanitize LLM output before it's rendered. Known gap in D-055's block: an abstract
+  containing the literal text `</papers>` would close the block early.
+- **Non-ASCII terms are destroyed by `build_search_query`.** `PUNCTUATION_PATTERN`
+  (`[^a-zA-Z0-9\s]`) treats every non-ASCII letter as punctuation, so "Schrödinger" becomes
+  `all:schr AND all:dinger` — two terms that match nothing, ANDed together, yielding zero results,
+  which D-021 records as a *success*. Logged as a known limit under D-059; raised to Open on
+  2026-09-20 because it silently fails on much of physics and most non-English author names.
+  Proposed: `[^\w\s]` with Python 3's default Unicode `\w`, which keeps accented letters while
+  still stripping arXiv's query syntax (`:`, `"`, parentheses). Verify arXiv accepts UTF-8 in
+  `search_query` before changing it.
 - **arXiv rate limit** (≤1 request every 3 s) under parallel `Send`: where the
   limiter lives.
 - **`recursion_limit` value.** `max_depth` is set (D-025); the backstop value
