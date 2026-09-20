@@ -88,8 +88,17 @@ and what was rejected. It's the answer to "why did you do it this way?"
 - **Known difference (from DeepSeek docs):** DeepSeek's JSON output is
   `json_object` only, so the JSON isn't guaranteed to match the schema, and it
   may return empty content. Expect more validation failures on DeepSeek.
-  LangChain's docs also say DeepSeek's reasoning model doesn't support
-  tool calling or structured output.
+  ~~LangChain's docs also say DeepSeek's reasoning model doesn't support
+  tool calling or structured output.~~
+- **Correction (2026-09-20, verified against DeepSeek's docs):** the struck-out line has
+  **expired**. `deepseek-chat` and `deepseek-reasoner` were retired on 2026-07-24; the current
+  models are `deepseek-flash` (DeepSeek-V4.1-Flash, the one configured here) and `deepseek-v4-pro`,
+  and **both support JSON output and tool calls**. The rest of this entry still holds: JSON is
+  `json_object` only, so schema conformance isn't guaranteed, and the docs still warn about
+  occasional empty content. This correction is what settles D-066 — there is no longer a capability
+  gap to guard against, only validation failures to catch.
+- **Lesson worth keeping:** a provider constraint written into this log is a fact with an expiry
+  date. Re-verify one before building anything around it.
 
 ### D-016 — LLM client: LangChain chat models
 - **Decision:** `langchain-openai` (`ChatOpenAI`) and `langchain-deepseek`
@@ -573,7 +582,73 @@ and what was rejected. It's the answer to "why did you do it this way?"
   English and ASCII only, so a non-English question keeps its stopwords — they become search terms
   rather than being dropped. That's a smaller problem than deleting the letters.
 
+### D-064 — arXiv access is serialized by a limiter passed into `build_graph` (settles O-1)
+- **Decision:** a small `ArxivRateLimiter` — an `asyncio.Semaphore(1)` held **across** the request,
+  plus monotonic-clock spacing — is created by the caller and passed into `build_graph`, alongside
+  the model factory, HTTP client and checkpointer (D-032, D-049). Tests pass `min_interval=0`.
+- **Why the semaphore is held across the request, not just around the start:** measured 2026-09-20.
+  A token-bucket limiter paces request *starts*, so when a request outlasts the interval the next
+  one begins before it finishes — peak **2 concurrent connections** in a 4-worker simulation.
+  arXiv's terms allow one connection at a time *and* one request per three seconds (D-042). Holding
+  the semaphore for the whole request satisfies both at once, and the effective spacing becomes
+  `max(min_interval, request_duration)` with no extra code.
+- **Rejected:** `langchain_core.rate_limiters.InMemoryRateLimiter`, which is already a dependency and
+  needs no new code — but it is a token bucket, so it produced the 2-concurrent result above and does
+  not meet arXiv's terms. Also rejected: `httpx.Limits(max_connections=1)`, which serializes but adds
+  no spacing, so it solves half the problem in a place nobody looks; and a module-level limiter inside
+  `sources/arxiv.py`, because a module-level `asyncio.Semaphore` binds to the first event loop that
+  touches it and then fails across tests.
+- **The reframe worth keeping:** arXiv's terms make parallel *searching* non-compliant however it is
+  implemented. The parallelism milestone 3 buys is in the LLM work (reading, summarizing, gap
+  analysis); arXiv access is a queue that parallel workers take turns on. Serialization here is a
+  policy requirement, **not** a performance bug to optimize away later.
+
+### D-065 — Retry 429 and 5xx; re-raise every other 4xx (refines D-027, D-048; settles O-2)
+- **Decision:** the worker treats `429` and `5xx` as external failures that count toward the N=2
+  retry cap (D-020). Every other `HTTPStatusError` — notably `400` and `404` — is re-raised and
+  crashes the run.
+- **Why:** confirmed 2026-09-20 — arXiv serves its error feed with **HTTP 400**
+  (`test_search_arxiv_raises_on_http_400`), so `raise_for_status()` fires before `parse_feed` runs.
+  Under the previous catch-all, a malformed query from a bug in `build_search_query` — exactly the
+  class D-059 warns about — was retried twice and then recorded as "subtopic failed". A bug wore a
+  network failure's clothes, which is precisely what D-023's fail-fast rule exists to prevent. A 4xx
+  means *we* sent something wrong.
+- **Rejected:** an explicit status map (`{429, 5xx}` retry, `{400, 404}` crash, else crash). More
+  precise and easier to test per status, but a table to maintain while there is still only one
+  source. Revisit when a second source lands.
+- **Known consequence:** `ArxivAPIError` remains unreachable through `search_arxiv`, since arXiv's
+  error feed arrives with a 400 that `raise_for_status()` catches first. It is exercised only by
+  tests calling `parse_feed` directly. Whether to raise it *before* `raise_for_status()`, so arXiv's
+  own error text ("incorrect id format") reaches the log instead of a bare `400 Bad Request`, is
+  left open.
+
+### D-066 — One model for every role; Pydantic validation is the structured-output guard (settles O-3)
+- **Decision:** no per-role model table and no capability matrix. Every role uses the model chosen
+  for the run's provider. Where a node needs structured data, it asks for JSON and validates the
+  reply with Pydantic at the boundary (D-013); the resulting `ValidationError` is already on the
+  worker's catch list (D-048) and drives the retry.
+- **Why the guard this originally proposed is unnecessary:** the premise expired. D-015 recorded that
+  DeepSeek's reasoning model supports neither tool calling nor structured output. Verified against
+  DeepSeek's docs on 2026-09-20: `deepseek-chat` and `deepseek-reasoner` were **retired 2026-07-24**,
+  and both current models (`deepseek-flash`, `deepseek-v4-pro`) support JSON output *and* tool calls.
+  The configured `deepseek-flash` is correct and current.
+- **Why the guard was also impossible:** verified 2026-09-20 — `with_structured_output(...)` binds
+  without error on *any* chat model, including one that cannot honor it. LangChain does not expose
+  model capabilities, so a "startup check" would have to be a hand-maintained table of
+  (provider, model) → capability. That table is the same kind of artifact that just went stale inside
+  D-015, and it would fail in the more dangerous direction: wrongly refusing to start.
+- **What still holds from D-015:** DeepSeek's JSON is `json_object` only, so schema conformance is
+  not guaranteed, and the docs still warn the API "may occasionally return empty content". Both are
+  validation failures, which is exactly what Pydantic at the boundary is for. Expect more retries on
+  DeepSeek than on OpenAI.
+- **Rejected:** `MODELS_BY_ROLE` in config, which would allow tuning cost against quality per role
+  (a cheap planner, a stronger synthesizer). Deferred, not dismissed — revisit with real token-cost
+  numbers from the thesis evaluation runs rather than by guessing now.
+
 ## Open (proposed, not decided)
+
+**Settled 2026-09-20:** O-1 → D-064, O-2 → D-065, O-3 → D-066. The remaining numbering is unchanged
+so earlier references stay valid.
 
 Each item lists the real options with their tradeoffs and a recommendation. A recommendation
 here is **not** a decision — it moves into the log with a new ID only once confirmed.
@@ -581,70 +656,10 @@ Grouped by the milestone that forces the choice.
 
 ---
 
-### Needed for milestone 3 (`decompose` + `Send` fan-out)
+### Milestone 3 — all settled 2026-09-20
 
-#### O-1 — Where the arXiv rate limiter lives
-
-**Problem.** arXiv's terms allow "no more than one request every three seconds" and "a single
-connection at a time" (D-042). Milestone 3 fans out to parallel `Send` workers, each wanting to
-search.
-
-**The reframe that decides it:** arXiv's terms make parallel *searching* non-compliant no matter
-how it is implemented. So the question is not "how do we parallelize arXiv" — it is "what is
-actually parallel". Answer: the LLM work (reading, summarizing, gap analysis). arXiv access is a
-serialized queue that parallel workers take turns on.
-
-| Option | Pros | Cons |
-|---|---|---|
-| **A. A shared async limiter passed into `build_graph`**, alongside the HTTP client — an `asyncio.Semaphore(1)` plus monotonic-clock spacing | Enforces *both* rules in one object. Same dependency-injection pattern as D-032/D-049, so it is visible in the signature and swappable in tests (a zero-delay limiter keeps the suite fast) | One more constructor parameter. Must be created inside the running loop — a module-level `Semaphore` binds to the wrong event loop and breaks across tests |
-| **B. Transport-level, inside `httpx`** — `Limits(max_connections=1)` plus a custom transport that sleeps | Invisible to node code; impossible to forget | `max_connections=1` gives serialization but *not* the 3-second spacing, so it only solves half. A custom transport hides timing where no one looks, and is awkward to assert on |
-| **C. Serialize the whole search step** — fan out planning, but run searches in a loop | Trivially correct, nothing to build | Throws away the concurrency of the LLM work too, which is the only real win available |
-
-**Recommendation: A.** It is the only option that enforces both rules, and it keeps the project's
-existing "caller owns the dependency" rule intact. State plainly in the entry that arXiv access is
-serialized *by policy*, so nobody later reads the serialization as a performance bug and "fixes" it.
-
-#### O-2 — Treat HTTP 4xx and 5xx differently (refines D-027)
-
-**Problem.** D-027/D-048 catch every `httpx.HTTPStatusError` as an external failure, so it counts
-toward the N=2 retry cap (D-020) and is then silently dropped.
-
-**Concrete harm, confirmed 2026-09-20:** arXiv serves its error feed with **HTTP 400**
-(`test_search_arxiv_raises_on_http_400`), so `raise_for_status()` fires before `parse_feed` runs.
-A malformed query — a bug in `build_search_query`, exactly the class D-059 warns about — would be
-retried twice and recorded as "subtopic failed". A bug would masquerade as an unlucky network.
-Side effect: `ArxivAPIError` is currently unreachable through `search_arxiv`, and is only exercised
-by tests calling `parse_feed` directly.
-
-| Option | Pros | Cons |
-|---|---|---|
-| **A. Retry 429 and 5xx; re-raise every other 4xx** | Matches D-023's fail-fast rule: 4xx means *we* sent something wrong. A bug crashes loudly instead of being absorbed | One more branch in the worker. A genuinely transient 4xx (rare) becomes fatal |
-| **B. Status quo — catch everything** | Simplest; a run never dies mid-way | A query-building bug is indistinguishable from arXiv being down. Already demonstrated above |
-| **C. Explicit status map** — `{429, 500..599}` retry, `{400, 404}` crash, anything else crash | Most precise, self-documenting, easy to test per status | A table to maintain; over-engineered for one source today, but milestone 3+ adds more |
-
-**Recommendation: A now, C when a second source lands.** Worth deciding at the same time whether
-`ArxivAPIError` should be raised *before* `raise_for_status()`, so arXiv's own error text
-("incorrect id format") reaches the log instead of a bare `400 Bad Request`.
-
-#### O-3 — Models per role
-
-**Problem.** The planner, gap checker and synthesizer have different needs. The planner and gap
-checker want structured output; the synthesizer wants prose and streams to the browser. D-015
-records that DeepSeek's reasoning model supports neither tool calling nor structured output, so a
-per-run provider choice can silently break a role.
-
-| Option | Pros | Cons |
-|---|---|---|
-| **A. `MODELS_BY_ROLE` in config + a startup check** that refuses to start if a structured-output role gets a model that cannot do it | Fails at startup with a clear message, not mid-run. The factory already exists (D-029) | Needs a per-model capability table that must track provider changes — a maintenance burden and a source of wrong "unsupported" errors |
-| **B. Per-role providers in `RunContext`** | The UI could choose per role | Mixes run data with wiring, which D-032 explicitly rejected. Multiplies the UI surface for a choice nobody asked for |
-| **C. One model for every role (status quo), with the structured-output guard only** | Nothing to build. The provider choice stays one dropdown | A cheap model that is fine for planning is also used for synthesis, and vice versa — no way to tune cost against quality |
-
-**Recommendation: C plus the guard, until a role actually needs a different model.** The real
-requirement hiding inside this item is the *guard*, not the per-role table: a run that will fail
-because DeepSeek cannot do structured output should fail at `intake`, next to the other context
-checks (D-033), not three nodes in. Build the guard at milestone 3; defer the table.
-
----
+O-1 (arXiv rate limiter) → **D-064** · O-2 (4xx vs 5xx) → **D-065** · O-3 (models per role) → **D-066**.
+Nothing open blocks the `Send` fan-out.
 
 ### Needed for milestone 4 (`gap_check` + recursion)
 
@@ -784,9 +799,9 @@ return nothing.
 
 | # | Item | Recommendation | Needed by |
 |---|---|---|---|
-| O-1 | arXiv rate limiter | Shared limiter passed into `build_graph`; arXiv serialized by policy | Milestone 3 |
-| O-2 | 4xx vs 5xx | Retry 429 + 5xx, re-raise other 4xx | Milestone 3 |
-| O-3 | Models per role | One model + a structured-output guard in `intake`; defer the table | Milestone 3 |
+| ~~O-1~~ | arXiv rate limiter | **Settled → D-064** | ~~M3~~ |
+| ~~O-2~~ | 4xx vs 5xx | **Settled → D-065** | ~~M3~~ |
+| ~~O-3~~ | Models per role | **Settled → D-066** | ~~M3~~ |
 | O-4 | `recursion_limit` | 15, plus a test that a full-depth run fits | Milestone 4 |
 | O-5 | Failures visible | State first, `custom` events later; add a limitations section | Milestone 4 |
 | O-6 | Frontend | htmx — but verify its SSE + streaming-markdown story first | Milestone 5 |

@@ -76,6 +76,22 @@ description: This project's LangGraph implementation patterns — state schema s
   `defusedxml.ElementTree.fromstring(..., forbid_dtd=True)` (D-047). Never catch `BaseException`, let programming errors crash,
   and add no backoff around LLM calls, since the OpenAI client already retries. N counts
   failed worker runs, not HTTP retries (D-024).
+- **Not every `HTTPStatusError` is external (D-065).** Retry only `429` and `5xx`; re-raise
+  every other 4xx. arXiv answers a malformed query with **400**, and `raise_for_status()`
+  fires before the feed is parsed — so catching all 4xx turns a query-building bug into
+  "subtopic failed", retried twice and then silently dropped. A 4xx means *we* sent
+  something wrong.
+- **arXiv access is serialized by policy, not by accident (D-064).** An `ArxivRateLimiter`
+  (`asyncio.Semaphore(1)` held **across** the request, plus monotonic spacing) is created by
+  the caller and passed into `build_graph`. Holding the semaphore only around the request
+  *start* — what a token-bucket limiter does — allows 2 concurrent connections when a request
+  outlasts the interval, which breaks arXiv's "one connection at a time". The parallelism
+  `Send` buys is in the LLM work; searches queue. Never "optimize" that away.
+- **One model for every role (D-066).** No per-role table and no capability matrix.
+  A node needing structured data asks for JSON and validates it with Pydantic at the
+  boundary (D-013); the `ValidationError` is already on the catch list above and drives the
+  retry. `with_structured_output(...)` binds without error even on a model that can't honor
+  it, so a "does this model support it" check is not possible without a hand-maintained table.
 - `depth` is 0-indexed. Recurse while `depth < max_depth`. With `max_depth = 2`,
   that's 3 search passes (D-025, D-026).
 - Reasoning and open questions (subtopic comparison, which exceptions to

@@ -107,7 +107,7 @@ outcome above. Kept here as the record of what wasn't yours:
 | # | Milestone | Open decisions to settle first (see `decisions.md` → Open) |
 |---|---|---|
 | 2 | One real source (arXiv), single subtopic, citation shape | **Done, ready to commit**: see the Milestone 2 section above (D-040 – D-062) |
-| 3 | `decompose` + `Send` fan-out, reducers | **O-1** arXiv rate limiter · **O-2** 4xx vs 5xx · **O-3** models per role |
+| 3 | `decompose` + `Send` fan-out, reducers | **None — all settled 2026-09-20** (D-064 limiter · D-065 4xx/5xx · D-066 one model) |
 | 4 | `gap_check` + depth recursion, retry cap, paper overlap | **O-4** `recursion_limit` value · **O-5** making failures visible |
 | 5 | Web layer: FastAPI + SSE + `AsyncSqliteSaver` | **O-6** frontend (htmx or SvelteKit) · **O-7** public entry function |
 
