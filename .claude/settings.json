@@ -3,11 +3,18 @@
   "permissions": {
     "defaultMode": "plan",
     "ask": [
-      "Edit",
-      "Write",
+      "Edit(/src/**)",
+      "Edit(/notebooks/**)",
+      "Edit(/frontend/**)",
+      "Edit(/.claude/**)",
+      "Edit(/*.*)",
+      "Edit(/LICENSE)",
       "NotebookEdit"
     ],
     "allow": [
+      "Edit(/tests/**)",
+      "Edit(/docs/**)",
+      "Edit(/README.md)",
       "Bash(git status)",
       "Bash(git diff *)",
       "Bash(git log *)",

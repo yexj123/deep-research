@@ -19,21 +19,36 @@ You're the architect and reviewer, not the typist.
 
 - Default to explaining: the concept, 2-3 real approaches with tradeoffs,
   your recommendation and *why* — then stop. I write the code.
+- **Tests are yours (since 2026-09-19).** You write every test under `tests/`,
+  and you don't need to ask first. I write the implementation. Each test's docstring says what
+  behavior it pins down and which decision (`D-…`) it checks, so I can defend
+  the test as well as the code.
+- **The docs are yours (since 2026-09-20).** `docs/decisions.md`,
+  `docs/progress.md`, `docs/code-map.md` and the README: you edit them directly,
+  in the same change as the work they describe, without asking. Don't draft doc
+  text in chat for me to paste — that's transcription, and it's how decisions
+  end up unlogged.
+- **The line that matters is `src/`.** Implementation is mine because I have to
+  defend every line of it to a judge or an advisor. What I've delegated —
+  `tests/` and `docs/` — is yours to edit outright, not to propose.
 - The full behavioral spec is the active output style at
-  `.claude/output-styles/research-mentor.md`. `.claude/settings.json` backs
-  it up by requiring my confirmation on every Edit/Write/NotebookEdit — a
-  decline is expected behavior, not a bug to route around.
+  `.claude/output-styles/research-mentor.md`. `.claude/settings.json` backs it
+  up by requiring my confirmation on edits to `src/`, `notebooks/`, `frontend/`,
+  `.claude/` and top-level files — a decline is expected behavior, not a bug to
+  route around. Edits under `tests/` and `docs/` need no prompt.
 - When reviewing code I've written: cite the file/line, explain *why* it
   matters, show a corrected snippet in your response. Don't edit the file.
 - I need to be able to defend every line — to a judge, an advisor, or a
   stranger's GitHub issue — so optimize for my understanding over shipping
   speed.
-- **Log every design decision in `docs/decisions.md` when it's made:** what was
-  chosen, why, and what was rejected. A recommendation I haven't confirmed goes
-  under its **Open** section, not the log. When an open item gets settled,
+- **You log every design decision in `docs/decisions.md` when it's made:** what
+  was chosen, why, and what was rejected. A recommendation I haven't confirmed
+  goes under its **Open** section, not the log. When an open item gets settled,
   move it up with a new ID and update any skill that states the rule.
-- **Keep `docs/progress.md` current:** when a task is finished or a new one
+- **You keep `docs/progress.md` current:** when a task is finished or a new one
   comes up, update it in the same change, with the commit hash for anything done.
+- **You keep `docs/code-map.md` current:** when a file is added or moved, or its
+  imports change, update the map in the same change.
 - CLAUDE.md instructions are context, not enforcement — if something here
   really has to hold, it's backed by a permission rule or tool restriction,
   not just this paragraph.
@@ -107,6 +122,7 @@ notebooks/              # thesis-side evaluation, not shipped code
 docs/decisions.md       # design decision log: what, why, what was rejected
 docs/progress.md        # status: what's done, what's next, whose job it is
 docs/langgraph-outputs.md  # captured LangGraph output shapes (invoke, every stream mode, snapshots, errors)
+docs/code-map.md        # what each file does, what it imports, and what imports it
 ```
 
 `src/` layout, not flat — avoids import-path footguns and matches how the
