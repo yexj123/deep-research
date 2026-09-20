@@ -6,8 +6,11 @@ What each file does, what it uses, and what uses it. Built from the actual impor
 **Status tags**
 - **[M3]**: new in milestone 3, implemented and tested (not committed yet)
 - **[M1]**: implemented and tested (milestone 1)
-- **[M2]**: new in milestone 2, implemented and tested (not committed yet)
-- **[M1 → M2]**: from milestone 1, changed in milestone 2
+- **[M2]**: added in milestone 2
+- **[M1 → M2]** / **[M1 → M3]**: from an earlier milestone, changed since
+
+`agent/nodes/search.py` was **deleted** at milestone 3: `research_worker` replaced it with the same
+search, one per subtopic and with a catch list.
 
 ---
 
@@ -189,20 +192,6 @@ pass `RecordingFactory` instead and no test ever needs a key (D-029, D-032).
 **Raises** a `ValueError` starting `"intake: …"` for a missing context, an invalid provider or a blank question (D-033).
 **Registered by:** `graph.py`, as the node named `"intake"`.
 
-### `agent/nodes/search.py` [M2 — superseded]
-**Not registered by `graph.py` any more.** `research_worker` replaced it at milestone 3: the same
-search, but one per subtopic and with a catch list. Delete it or keep it deliberately.
-
-**Defines:** `make_search(http_client)`, which returns the async `search(state)` node (the same pattern as `make_synthesize`).
-**Uses:**
-- `sources/arxiv.py`: `build_search_query` and `search_arxiv`;
-- `state.ResearchState`;
-- `config.ARXIV_MAX_RESULTS`.
-
-**Reads:** `state.question`. **Writes:** `sources`, `skipped_entries`.
-**Catches nothing** at milestone 2, so a failed search fails the run (D-053).
-**Registered by:** `graph.py`, as `"search"`, via `make_search(http_client)`.
-
 ### `agent/nodes/decompose.py` [M3]
 **Defines:** `SYSTEM_PROMPT` (asks for JSON), `SubtopicPlan` (the Pydantic reply model),
 `MAX_FAILURES = 2`, `_is_searchable`, `_keep_worth_researching`, and `make_decompose(model_factory)`.
@@ -298,7 +287,8 @@ Node names are part of the streaming contract: they appear as `metadata["langgra
 - `build_search_query` (D-051, D-059), `split_versioned_id`, `entry_to_source` (D-058), `parse_feed`, `search_arxiv`.
 
 **Uses:** `sources/models.Source`, `httpx`, `defusedxml`.
-**Used by:** `nodes/search.py`, `test_arxiv.py`.
+**Used by:** `nodes/research_worker.py`, `nodes/decompose.py` (`build_search_query`, for the
+searchability filter, D-073), `test_arxiv.py`.
 **Call chain inside the file:**
 1. `search_arxiv` makes the HTTP GET and calls `raise_for_status`, then `parse_feed`;
 2. `parse_feed` runs `defusedxml` with `forbid_dtd=True`, checks for the error feed, then calls `entry_to_source` once per entry;

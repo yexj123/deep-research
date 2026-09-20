@@ -1,3 +1,6 @@
+"""Graph state: what every node reads, what the checkpointer saves after each step, and the
+reducers that merge parallel writes (D-013, D-054, D-067)."""
+
 import operator
 from dataclasses import dataclass, field
 from typing import Annotated
@@ -13,7 +16,7 @@ def normalize_subtopic(text: str) -> str:
 def merge_subtopics(current: list[str], update: list[str]) -> list[str]:
     """Append subtopics whose normalized form isn't present yet, keeping original text (D-067)."""
     seen = {normalize_subtopic(topic) for topic in current}
-    merged = list(current)          # copy: never
+    merged = list(current)  # copy: never mutate the left argument, LangGraph may still hold it
     for topic in update:
         key = normalize_subtopic(topic)
         if key not in seen:
@@ -23,7 +26,11 @@ def merge_subtopics(current: list[str], update: list[str]) -> list[str]:
 
 
 def merge_sources(current: list[Source], update: list[Source]) -> list[Source]:
-    """Append papers whose arxiv_id isn't present(D-067)."""
+    """Append papers whose arxiv_id isn't present yet, keeping the first seen (D-067).
+
+    Keyed on arxiv_id, not on the Source object: Source is frozen and hashable, so a set
+    would compile and still keep v1 and v2 of one paper as two entries (D-044).
+    """
     seen = {source.arxiv_id for source in current}
     merged = list(current)
     for source in update:
@@ -37,7 +44,8 @@ def merge_sources(current: list[Source], update: list[Source]) -> list[Source]:
 class ResearchState:
     question: str
     review: str = ""
-    # Overwritten each round: operator.add would nd (D-017).
+    # No reducer, overwritten each round: operator.add would re-dispatch every earlier
+    # round's subtopics alongside the new ones (D-017).
     pending_subtopics: list[str] = field(default_factory=list)
     # Parallel writers from here down (D-067).
     explored_subtopics: Annotated[list[str], merge_subtopics] = field(default_factory=list)

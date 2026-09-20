@@ -16,14 +16,9 @@ Backed by `CLAUDE.md`, the output style, and `Edit(/tests/**)`, `Edit(/docs/**)`
 
 - [ ] *(Optional)* Delete the old 55 MB uv cache on C::
       `uv cache clean --cache-dir "$env:LOCALAPPDATA\uv\cache"`
-- [ ] **Four truncated comments in `state.py`** (from the 2026-09-20 paste): the module docstring is
-      gone; `# copy: never` should read "never mutate the left argument"; `merge_sources`' docstring
-      lost "yet, keeping the first seen"; and `operator.add would nd` should read "would re-dispatch
-      every earlier round". These are the comments carrying the non-obvious reasoning, so a
-      truncated one reads as deliberate.
-- [ ] **Re-run the paid integration test** — milestone 3 changed the graph, so the 2026-09-20 run
-      no longer covers it: `uv run pytest -m integration`
-- [ ] **Decide on `nodes/search.py`** — unused since `research_worker` replaced it
+- [x] Fixed the four truncated comments in `state.py`
+- [x] Re-ran the paid integration test against the milestone 3 graph — **1 passed** in 16.58s
+- [x] Deleted `nodes/search.py`, superseded by `research_worker`
 
 ## Milestone 3: `decompose` + `Send` fan-out
 
@@ -47,9 +42,16 @@ and the reducers merge their results without losing or double-counting anything.
 - [x] `test_graph.py` updated for the milestone 3 contract (node order, the limiter argument,
       two scripted model replies)
 
-**Next:**
-- [ ] Integration test: milestone 3 changed the graph, so the paid run should be repeated
+- [x] Integration test re-run against the milestone 3 graph (see below)
 - [x] Committed as `b4a4dff`
+
+**What the milestone 3 integration run proved (2026-09-20, `gpt-4o`, 16.58s):** a real planner
+decomposed the question into more than one subtopic; every subtopic's worker succeeded
+(`explored_subtopics == pending_subtopics`, `failed_subtopics` empty); the review streamed in
+several `messages` chunks and the joined text equalled the saved review exactly; at least one
+`[arXiv:<id>]` citation was present and `citation_violations == []`. Run with the **real**
+`ArxivRateLimiter`, so arXiv's 1-request-per-3-seconds rule was honoured. Same caveat as milestone
+2: one run shows the behaviour is achievable, not that it is reliable.
 
 **Three things measured while building this** (all in `decisions.md`):
 - **An empty `Send` list ends the run silently** — no error, no downstream node, no review.
