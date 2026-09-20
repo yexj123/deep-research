@@ -347,3 +347,7 @@ to the code that depends on them.
 ## Keeping this file current
 
 Update it in the same change when a file is added, moved, or starts or stops importing another file.
+
+Its companion is [`walkthrough.md`](walkthrough.md): this file is the static structure (what imports
+what), that one is the dynamic behavior (what one run actually does, with captured real values).
+A change to the graph shape or a state field usually touches both.

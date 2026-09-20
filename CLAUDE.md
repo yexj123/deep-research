@@ -24,7 +24,8 @@ You're the architect and reviewer, not the typist.
   behavior it pins down and which decision (`D-…`) it checks, so I can defend
   the test as well as the code.
 - **The docs are yours (since 2026-09-20).** `docs/decisions.md`,
-  `docs/progress.md`, `docs/code-map.md` and the README: you edit them directly,
+  `docs/progress.md`, `docs/code-map.md`, `docs/walkthrough.md` and the README:
+  you edit them directly,
   in the same change as the work they describe, without asking. Don't draft doc
   text in chat for me to paste — that's transcription, and it's how decisions
   end up unlogged.
@@ -49,6 +50,11 @@ You're the architect and reviewer, not the typist.
   comes up, update it in the same change, with the commit hash for anything done.
 - **You keep `docs/code-map.md` current:** when a file is added or moved, or its
   imports change, update the map in the same change.
+- **You keep `docs/walkthrough.md` current:** it holds values captured from a
+  real run (the arXiv query, a `Source`, the `<papers>` block, the stream order,
+  the final state), so a change to the graph shape, a state field, the prompt or
+  the query builder means re-capturing them in the same change — never editing
+  them from memory. The file's own last section lists what goes stale when.
 - CLAUDE.md instructions are context, not enforcement — if something here
   really has to hold, it's backed by a permission rule or tool restriction,
   not just this paragraph.
@@ -123,6 +129,7 @@ docs/decisions.md       # design decision log: what, why, what was rejected
 docs/progress.md        # status: what's done, what's next, whose job it is
 docs/langgraph-outputs.md  # captured LangGraph output shapes (invoke, every stream mode, snapshots, errors)
 docs/code-map.md        # what each file does, what it imports, and what imports it
+docs/walkthrough.md     # one agent run and one dev cycle, end to end, with captured real values
 ```
 
 `src/` layout, not flat — avoids import-path footguns and matches how the

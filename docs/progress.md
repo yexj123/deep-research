@@ -46,7 +46,8 @@ followed the marker format. Caveat worth stating in any write-up: that is **one*
 prompt adherence is achievable, not that it's reliable; measuring how often it holds is
 `notebooks/` work for the thesis, not a unit test.
 
-**Design:** D-040 – D-062. How the files relate is explained in [`code-map.md`](code-map.md).
+**Design:** D-040 – D-062. How the files relate is explained in [`code-map.md`](code-map.md);
+what one run actually does, step by step with real values, is in [`walkthrough.md`](walkthrough.md).
 
 ### Review outcome (2026-09-20)
 
