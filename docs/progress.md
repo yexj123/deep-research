@@ -30,7 +30,7 @@ Backed by `CLAUDE.md`, the output style, and `Edit(/tests/**)`, `Edit(/docs/**)`
 **Goal:** the planner proposes subtopics, `Send` dispatches one worker per subtopic in parallel,
 and the reducers merge their results without losing or double-counting anything.
 
-**Status (2026-09-20):** code complete, not committed. `uv run pytest`: **131 passed, 1 deselected**
+**Status (2026-09-20):** done, committed as `b4a4dff`. `uv run pytest`: **131 passed, 1 deselected**
 (up from 66 at milestone 2). Decisions: D-064 – D-074.
 
 **Done:**
@@ -49,7 +49,7 @@ and the reducers merge their results without losing or double-counting anything.
 
 **Next:**
 - [ ] Integration test: milestone 3 changed the graph, so the paid run should be repeated
-- [ ] Commit, then record the hash here
+- [x] Committed as `b4a4dff`
 
 **Three things measured while building this** (all in `decisions.md`):
 - **An empty `Send` list ends the run silently** — no error, no downstream node, no review.
@@ -137,7 +137,7 @@ outcome above. Kept here as the record of what wasn't yours:
 | # | Milestone | Open decisions to settle first (see `decisions.md` → Open) |
 |---|---|---|
 | 2 | One real source (arXiv), single subtopic, citation shape | **Done, ready to commit**: see the Milestone 2 section above (D-040 – D-062) |
-| 3 | `decompose` + `Send` fan-out, reducers | **None — all settled 2026-09-20** (D-064 limiter · D-065 4xx/5xx · D-066 one model) |
+| 3 | `decompose` + `Send` fan-out, reducers | **Done, `b4a4dff`** (D-064 – D-074) |
 | 4 | `gap_check` + depth recursion, retry cap, paper overlap | **O-4** `recursion_limit` value · **O-5** making failures visible |
 | 5 | Web layer: FastAPI + SSE + `AsyncSqliteSaver` | **O-6** frontend (htmx or SvelteKit) · **O-7** public entry function |
 
