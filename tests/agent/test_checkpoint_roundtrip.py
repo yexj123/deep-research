@@ -11,7 +11,14 @@ from deep_research.agent.context import RunContext
 from deep_research.agent.graph import build_graph
 from deep_research.agent.sources.models import Source
 from deep_research.persistence.checkpointer import build_serializer
-from tests.agent.fakes import RecordingFactory, load_arxiv_fixture, make_arxiv_stub
+from tests.agent.fakes import (
+    DEFAULT_PLAN_REPLY,
+    DEFAULT_REPLY,
+    NullLimiter,
+    RecordingFactory,
+    load_arxiv_fixture,
+    make_arxiv_stub,
+)
 
 
 async def _first_restored_source(serde: JsonPlusSerializer) -> Any:
@@ -19,8 +26,9 @@ async def _first_restored_source(serde: JsonPlusSerializer) -> Any:
     checkpointer = InMemorySaver(serde=serde)
     config: RunnableConfig = {"configurable": {"thread_id": "round-trip"}}
     stub = make_arxiv_stub(load_arxiv_fixture("search_ok.xml"))
+    factory = RecordingFactory(replies=[DEFAULT_PLAN_REPLY, DEFAULT_REPLY])
     async with stub.client:
-        graph = build_graph(RecordingFactory(), stub.client, checkpointer)
+        graph = build_graph(factory, stub.client, NullLimiter(), checkpointer)
         await graph.ainvoke(
             {"question": "What is retrieval augmented generation?"},
             config,

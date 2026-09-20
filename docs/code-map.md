@@ -1,9 +1,10 @@
 # Code map
 
 What each file does, what it uses, and what uses it. Built from the actual imports on
-2026-09-19. Design reasons are in [`decisions.md`](decisions.md) (the `D-` numbers).
+2026-09-20. Design reasons are in [`decisions.md`](decisions.md) (the `D-` numbers).
 
 **Status tags**
+- **[M3]**: new in milestone 3, implemented and tested (not committed yet)
 - **[M1]**: implemented and tested (milestone 1)
 - **[M2]**: new in milestone 2, implemented and tested (not committed yet)
 - **[M1 → M2]**: from milestone 1, changed in milestone 2
@@ -19,10 +20,12 @@ What each file does, what it uses, and what uses it. Built from the actual impor
   wiring           agent/graph.py
                      │ registers the nodes and connects them
                      ▼
-  nodes            agent/nodes/intake.py · search.py · synthesize.py · check_citations.py
+  nodes            agent/nodes/intake.py · decompose.py · research_worker.py · synthesize.py
+                   check_citations.py
                      │ read state, return partial updates
                      ▼
   building blocks  agent/llm.py (chat models) · agent/sources/arxiv.py (arXiv client and parser)
+                   agent/sources/rate_limit.py (ArxivRateLimiter, D-064)
                      │
                      ▼
   definitions      agent/context.py · agent/config.py · agent/state.py · agent/sources/models.py
@@ -48,7 +51,9 @@ flowchart TD
     graph["agent/graph.py"]
     intake["nodes/intake.py"]
     synth["nodes/synthesize.py"]
-    search["nodes/search.py [M2]"]
+    decomp["nodes/decompose.py [M3]"]
+    worker["nodes/research_worker.py [M3]"]
+    ratelim["sources/rate_limit.py [M3]"]
     cites["nodes/check_citations.py [M2]"]
     llm["agent/llm.py"]
     arxiv["sources/arxiv.py [M2]"]
@@ -61,15 +66,22 @@ flowchart TD
     graph --> context
     graph --> llm
     graph --> intake
-    graph --> search
+    graph --> decomp
+    graph --> worker
+    graph --> ratelim
     graph --> synth
     graph --> cites
     graph --> state
     intake --> context
     intake --> state
-    search --> arxiv
-    search --> config
-    search --> state
+    decomp --> arxiv
+    decomp --> config
+    decomp --> context
+    decomp --> llm
+    decomp --> state
+    worker --> arxiv
+    worker --> config
+    worker --> ratelim
     synth --> context
     synth --> llm
     synth --> models
@@ -120,10 +132,24 @@ data that is (D-015, D-032).
 - `tests/agent/test_llm.py` imports `API_KEY_ENV_VARS` and the two limits, to check the built clients against the same values.
 
 **Milestone 2 added:**
-- `ARXIV_MAX_RESULTS = 10`, used by `nodes/search.py`;
+- `ARXIV_MAX_RESULTS = 10`, used by `nodes/research_worker.py`;
 - `ARXIV_TIMEOUT_SECONDS = 30.0`, used by whoever creates the `httpx.AsyncClient`: the integration test now, the web layer later (D-052).
 
-### `agent/state.py` [M1 → M2]
+**Milestone 3 added:**
+- `ARXIV_MIN_INTERVAL_SECONDS = 3.0`, used by whoever creates the `ArxivRateLimiter` (D-064);
+- `MAX_SUBTOPICS = 3`, used by `nodes/decompose.py` for both the prompt and the filter cap (D-070).
+
+### `agent/state.py` [M1 → M3]
+**Also defines the reducers** (D-067), kept beside the fields they serve so one file explains the
+whole state contract: `normalize_subtopic` (casefold + strip, D-017), `merge_subtopics` (dedup on
+the normalized form, storing the original text) and `merge_sources` (dedup on `arxiv_id`, keep
+first). Both copy before appending -- a reducer must never mutate its left argument.
+
+**Milestone 3 fields:** `pending_subtopics` (**no reducer**, overwritten each round),
+`explored_subtopics`, `failed_subtopics` (`operator.add`, duplicates are the attempt count),
+`seen_paper_ids` (`set[str]`, `operator.or_`), `depth`. `sources` and `skipped_entries` gained
+reducers because `research_worker` writes them in parallel.
+
 **Defines:** `ResearchState`, the graph's state dataclass:
 - `question` (no default, because it's the required input);
 - `review = ""`;
@@ -163,7 +189,10 @@ pass `RecordingFactory` instead and no test ever needs a key (D-029, D-032).
 **Raises** a `ValueError` starting `"intake: …"` for a missing context, an invalid provider or a blank question (D-033).
 **Registered by:** `graph.py`, as the node named `"intake"`.
 
-### `agent/nodes/search.py` [M2]
+### `agent/nodes/search.py` [M2 — superseded]
+**Not registered by `graph.py` any more.** `research_worker` replaced it at milestone 3: the same
+search, but one per subtopic and with a catch list. Delete it or keep it deliberately.
+
 **Defines:** `make_search(http_client)`, which returns the async `search(state)` node (the same pattern as `make_synthesize`).
 **Uses:**
 - `sources/arxiv.py`: `build_search_query` and `search_arxiv`;
@@ -173,6 +202,39 @@ pass `RecordingFactory` instead and no test ever needs a key (D-029, D-032).
 **Reads:** `state.question`. **Writes:** `sources`, `skipped_entries`.
 **Catches nothing** at milestone 2, so a failed search fails the run (D-053).
 **Registered by:** `graph.py`, as `"search"`, via `make_search(http_client)`.
+
+### `agent/nodes/decompose.py` [M3]
+**Defines:** `SYSTEM_PROMPT` (asks for JSON), `SubtopicPlan` (the Pydantic reply model),
+`MAX_FAILURES = 2`, `_is_searchable`, `_keep_worth_researching`, and `make_decompose(model_factory)`.
+**Reads:** `state.question`, `state.explored_subtopics`, `state.failed_subtopics`,
+`runtime.context.provider`. **Writes:** `pending_subtopics`.
+**The division of labour:** the planner *proposes*; this node *decides*. The explored list in the
+prompt is a soft filter (D-022); the hard filters are the normalized-match check, the N=2 retry cap
+counted on normalized subtopics (D-020), and dropping subtopics `build_search_query` can't use
+(D-059, D-073). Validation is explicit (`model_validate_json`) and catches nothing, so an
+unparseable plan fails the run (D-070).
+**Registered by:** `graph.py`, as `"decompose"`.
+
+### `agent/nodes/research_worker.py` [M3]
+**Defines:** `SubtopicTask` (a **`TypedDict`** — `Send` payloads are checkpointed, so a custom class
+would come back as a plain `dict` on resume, D-071), `EXTERNAL_FAILURES`, `_is_external_status`, and
+`make_research_worker(http_client, limiter)`.
+**Reads:** its `Send` payload only — a worker never sees full state.
+**Writes (success):** `sources`, `skipped_entries` (its own delta), `explored_subtopics`,
+`seen_paper_ids`. **Writes (failure):** `failed_subtopics` only — never explored (D-018).
+**Catch list:** `httpx.TransportError`, `pydantic.ValidationError`, `ParseError`,
+`DefusedXmlException`, `ArxivAPIError`; plus `HTTPStatusError` **only** for 429/5xx — every other
+4xx re-raises, because it means we sent something wrong (D-065).
+Every request runs inside `async with limiter:` (D-064).
+**Registered by:** `graph.py`, as `"research_worker"`, reached only via `Send`.
+
+### `agent/sources/rate_limit.py` [M3]
+**Defines:** `ArxivRateLimiter(min_interval)`, an async context manager holding an
+`asyncio.Semaphore(1)` **across** the request plus monotonic-clock spacing (D-064).
+**Uses:** stdlib only. **Used by:** `nodes/research_worker.py`, and whoever builds the graph.
+**Why not a token bucket:** one paces request *starts*, which allows 2 concurrent connections when a
+request outlasts the interval (measured). arXiv permits one. Note the semaphore binds to the first
+event loop that uses it, so the web layer must create it inside the app lifespan.
 
 ### `agent/nodes/synthesize.py` [M1 → M2]
 **Defines:**
@@ -203,9 +265,14 @@ recorded verbatim. So a citation it can't read is never mistaken for a verified 
 is reported rather than accepted (D-046, D-062).
 **Registered by:** `graph.py`, as `"check_citations"`.
 
-### `agent/graph.py` [M1 → M2]
-**Defines:** `build_graph(model_factory, http_client, checkpointer)` (D-032, D-049). Wiring:
-START → `intake` → `search` → `synthesize` → `check_citations` → END.
+### `agent/graph.py` [M1 → M3]
+**Defines:** `build_graph(model_factory, http_client, limiter, checkpointer)` (D-032, D-049, D-064)
+and `route_subtopics(state)`. Wiring: START → `intake` → `decompose` →
+*(conditional)* → `research_worker` (one per subtopic, via `Send`) → `synthesize` →
+`check_citations` → END.
+`route_subtopics` is **not a node**: it is the conditional edge out of `decompose`. It returns the
+node name `"synthesize"` when `pending_subtopics` is empty, and `Send` objects otherwise — an empty
+`Send` list ends the run silently, with no error and no review (D-069).
 **Uses:** `ResearchState`, `RunContext`, the `ModelFactory` type, `httpx`, `intake`, `make_search`,
 `make_synthesize`, `check_citations`.
 **Used by:** `test_graph.py`, `test_checkpoint_roundtrip.py`, `test_integration.py`, and later the web layer.
@@ -267,28 +334,37 @@ Claude writes and maintains every file here (since 2026-09-19; see `CLAUDE.md`).
 | `agent/test_source_model.py` [M2] | `Source` validation: ID formats, tuple conversion, frozen, version and title (D-058), and that an unknown field raises rather than being dropped (D-061) | `make_source` |
 | `agent/test_arxiv.py` [M2] | Parser, query builder and client on the saved responses, with no network | `sources/arxiv.py`, `fakes` |
 | `agent/test_check_citations.py` [M2] | Citation grounding, calling the node directly; missing context fails loudly; unparseable markers are recorded, ordinary brackets aren't, and the no-bracket blind spot is pinned as a known limit (D-062) | `check_citations`, `Citation`, `ResearchState`, `make_source` |
+| `agent/test_reducers.py` [M3] | The merge reducers as pure functions: dedup keys, first-seen order, and that neither mutates its left argument (D-067) | `state.py` reducers, `make_source` |
+| `agent/test_decompose.py` [M3] | The planner's three hard filters, JSON validation, and `route_subtopics`' empty-plan guard (D-069, D-070, D-073) | `make_decompose`, `route_subtopics`, `fakes` |
+| `agent/test_research_worker.py` [M3] | The worker called directly: success contract, the 429/5xx-vs-4xx split, and that a failure never marks a subtopic explored (D-065, D-072) | `make_research_worker`, `fakes` |
+| `agent/test_fanout.py` [M3] | The whole graph fanning out: one worker per subtopic, reducers under parallel writes, partial failure, and which nodes stream (D-067, D-068, D-069) | `build_graph`, `fakes` |
 | `agent/test_checkpoint_roundtrip.py` [M2] | A `Source` comes back from a checkpoint as a `Source`, plus the control case (empty allowlist → `dict`) | `build_graph`, `build_serializer`, `JsonPlusSerializer`, `fakes` |
 
 ---
 
-## 5. One run, step by step (milestone 2)
+## 5. One run, step by step (milestone 3)
 
 ```text
 caller (test or web layer)
   1. model_factory = get_chat_model            (tests: RecordingFactory())
   2. http_client   = httpx.AsyncClient(timeout=ARXIV_TIMEOUT_SECONDS)   (tests: make_arxiv_stub(...).client)
-  3. checkpointer  = InMemorySaver(serde=build_serializer())            (web layer: AsyncSqliteSaver)
-  4. graph = build_graph(model_factory, http_client, checkpointer)
-  5. graph.astream({"question": ...}, {"configurable": {"thread_id": ...}},
+  3. limiter      = ArxivRateLimiter(ARXIV_MIN_INTERVAL_SECONDS)       (tests: NullLimiter())
+  4. checkpointer  = InMemorySaver(serde=build_serializer())            (web layer: AsyncSqliteSaver)
+  5. graph = build_graph(model_factory, http_client, limiter, checkpointer)
+  6. graph.astream({"question": ...}, {"configurable": {"thread_id": ...}},
                    context=RunContext(provider=...), stream_mode=[...], version="v2")
 
 inside the graph (a checkpoint is saved after every step)
-  intake           reads question, runtime.context    → writes question (stripped)
-  search           reads question                     → arxiv.search_arxiv(http_client, …)
-                                                       → writes sources, skipped_entries
-  synthesize       reads question, sources, provider  → model_factory(provider).ainvoke(...)
-                                                       → writes review   (tokens stream while it runs)
-                   (no sources: writes NO_SOURCES_REVIEW; no model is built)
+  intake            reads question, runtime.context   → writes question (stripped)
+  decompose         reads question, explored, failed   → model_factory(provider).ainvoke(...)
+                                                        → writes pending_subtopics (filtered)
+  route_subtopics   (conditional edge, not a node)     → Send per subtopic, or "synthesize"
+  research_worker   reads its Send payload only        → async with limiter: search_arxiv(...)
+    (one per subtopic, in parallel, one super-step)     → writes sources, skipped_entries,
+                                                          explored_subtopics, seen_paper_ids
+                                                        → on failure: failed_subtopics only
+  synthesize        reads question, sources, provider  → writes review (tokens stream)
+                    (no sources: writes NO_SOURCES_REVIEW; no model is built)
   check_citations  reads review, sources              → writes citation_violations
 ```
 
@@ -297,22 +373,28 @@ inside the graph (a checkpoint is saved after every step)
 | Field | Written by | Read by |
 |---|---|---|
 | `question` | the input; cleaned by `intake` | `search`, `synthesize` |
-| `sources` [M2] | `search` | `synthesize` (data block), `check_citations` (`known_ids`) |
-| `skipped_entries` [M2] | `search` | nobody yet (shown in the report later) |
+| `pending_subtopics` [M3] | `decompose` (overwrite) | `route_subtopics` |
+| `sources` [M2] | `research_worker` ‖ | `synthesize` (data block), `check_citations` (`known_ids`) |
+| `skipped_entries` [M2] | `research_worker` ‖ | nobody yet (shown in the report later) |
+| `explored_subtopics` [M3] | `research_worker` ‖ | `decompose` (filter + prompt) |
+| `failed_subtopics` [M3] | `research_worker` ‖ | `decompose` (N=2 retry cap) |
+| `seen_paper_ids` [M3] | `research_worker` ‖ | the `Send` payload; the overlap check at M4 (D-074) |
 | `review` | `synthesize` | `check_citations` |
 | `citation_violations` [M2] | `check_citations` | nobody yet (shown in the report / UI later). Unknown IDs *and* unparseable markers (D-062) |
 
-Each field has exactly one writer, so **no reducers are needed at milestone 2**. That changes at
-milestone 3, when parallel workers write `sources` at the same step.
+At milestone 2 each field had exactly one writer, so no reducers were needed. **That invariant ends
+at milestone 3:** the fields marked ‖ are written by parallel `Send` workers in the same step and
+each needs a reducer, or LangGraph raises `InvalidUpdateError` (D-067).
 
 ---
 
-## 6. The three dependencies passed into `build_graph`
+## 6. The four dependencies passed into `build_graph`
 
 | Dependency | Unit tests | Integration test | Web layer (milestone 5) |
 |---|---|---|---|
 | model factory | `RecordingFactory()` (`fake_factory` fixture) | `get_chat_model` | `get_chat_model` |
 | HTTP client [M2] | `make_arxiv_stub(...).client` (`arxiv_ok` fixture) | `httpx.AsyncClient(timeout=ARXIV_TIMEOUT_SECONDS)` | one shared client, opened at startup |
+| arXiv limiter [M3] | `NullLimiter()` (`limiter` fixture, zero delay) | `ArxivRateLimiter(ARXIV_MIN_INTERVAL_SECONDS)` | one limiter, created inside the app lifespan |
 | checkpointer | `InMemorySaver(serde=build_serializer())` (`checkpointer` fixture) | the same fixture | `AsyncSqliteSaver` with `serde=build_serializer()` |
 
 The graph code is identical in all three columns. Only the dependencies passed in change.
@@ -326,7 +408,10 @@ The graph code is identical in all three columns. Only the dependencies passed i
 | `API_KEY_ENV_VARS` | `agent/config.py` | `llm.py`, `test_llm.py` | D-034 |
 | `MODEL_NAMES` | `agent/config.py` | `llm.py` | D-029 |
 | `LLM_TIMEOUT_SECONDS`, `LLM_MAX_RETRIES` | `agent/config.py` | `llm.py`, `test_llm.py` | D-038, D-039 |
-| `ARXIV_MAX_RESULTS` [M2] | `agent/config.py` | `nodes/search.py` | D-052 |
+| `ARXIV_MAX_RESULTS` [M2] | `agent/config.py` | `nodes/research_worker.py` | D-052 |
+| `ARXIV_MIN_INTERVAL_SECONDS` [M3] | `agent/config.py` | whoever builds the `ArxivRateLimiter` | D-064 |
+| `MAX_SUBTOPICS` [M3] | `agent/config.py` | `nodes/decompose.py` (prompt + filter cap) | D-070 |
+| `MAX_FAILURES` [M3] | `nodes/decompose.py` | the N=2 retry cap | D-020 |
 | `ARXIV_TIMEOUT_SECONDS` [M2] | `agent/config.py` | whoever creates the HTTP client (`test_integration.py` now) | D-052 |
 | `VALID_PROVIDERS` | `nodes/intake.py` (built from `ProviderType`) | `intake` | D-033 |
 | `SYSTEM_PROMPT` | `nodes/synthesize.py` | `synthesize` | D-046, D-055 |

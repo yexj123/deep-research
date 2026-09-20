@@ -3,7 +3,7 @@
 What's done, what's next, and whose job each item is. Design reasoning
 lives in [`decisions.md`](decisions.md); this file only tracks status.
 
-**Last updated:** 2026-09-20 · **Current milestone:** 2 (one real source: arXiv)
+**Last updated:** 2026-09-20 · **Current milestone:** 3 (`decompose` + `Send` fan-out)
 
 **Who writes what:** you write the implementation (`src/`); Claude writes every test
 (since 2026-09-19) and keeps the docs (since 2026-09-20) — `docs/*.md` and the README.
@@ -14,22 +14,52 @@ Backed by `CLAUDE.md`, the output style, and `Edit(/tests/**)`, `Edit(/docs/**)`
 
 ## Do next (you)
 
-- [x] `.claude/settings.json`: removed `"MultiEdit"`, since Claude Code reported it "matches no known tool"
-      (duplicate `"Edit"` also removed; `CLAUDE.md` and the output style updated to match; commit `532473d`)
-- [x] **Fully quit and reopen VS Code once** for `UV_CACHE_DIR=E:\uv-cache` (the variable is set in the environment)
 - [ ] *(Optional)* Delete the old 55 MB uv cache on C::
       `uv cache clean --cache-dir "$env:LOCALAPPDATA\uv\cache"`
-- [x] **Review the milestone 2 code** — walked through on 2026-09-20 (see "Review outcome" below).
-      "No papers found" confirmed as D-060; two findings became D-061 and D-062
-- [x] **Apply the three review fixes** — `extra="forbid"` on `Source` (D-061), the corrected
-      `arxiv.py` comment, and `CITATION_BRACKET` in `check_citations.py` (D-062)
-- [x] Run `uv run pytest` → **66 passed, 1 deselected**
-- [x] Run the integration test → **1 passed** (2026-09-20, see below)
-- [x] Two comment fixes in `check_citations.py` from the review (module docstring, `CITATION_BRACKET`)
-- [x] Commit — milestone 2 is `60611ac`; the docs-ownership change is `2db3260`
-- [ ] **D-063 — one-line fix in `sources/arxiv.py`:** `PUNCTUATION_PATTERN = re.compile(r"[^\w\s]")`.
-      7 tests written and red. The old ASCII-only pattern turned "Schrödinger" into
-      `all:schr AND all:dinger`, which matched 903 unrelated papers instead of 20,184 right ones
+- [ ] **Four truncated comments in `state.py`** (from the 2026-09-20 paste): the module docstring is
+      gone; `# copy: never` should read "never mutate the left argument"; `merge_sources`' docstring
+      lost "yet, keeping the first seen"; and `operator.add would nd` should read "would re-dispatch
+      every earlier round". These are the comments carrying the non-obvious reasoning, so a
+      truncated one reads as deliberate.
+- [ ] **Re-run the paid integration test** — milestone 3 changed the graph, so the 2026-09-20 run
+      no longer covers it: `uv run pytest -m integration`
+- [ ] **Decide on `nodes/search.py`** — unused since `research_worker` replaced it
+
+## Milestone 3: `decompose` + `Send` fan-out
+
+**Goal:** the planner proposes subtopics, `Send` dispatches one worker per subtopic in parallel,
+and the reducers merge their results without losing or double-counting anything.
+
+**Status (2026-09-20):** code complete, not committed. `uv run pytest`: **131 passed, 1 deselected**
+(up from 66 at milestone 2). Decisions: D-064 – D-074.
+
+**Done:**
+- [x] `state.py`: `pending_subtopics`, `explored_subtopics`, `failed_subtopics`, `seen_paper_ids`,
+      `sources`, `skipped_entries`, `depth`, with the reducers from D-067 → `test_reducers.py` (14)
+- [x] `sources/rate_limit.py`: `ArxivRateLimiter` (D-064), passed into `build_graph`
+- [x] `nodes/research_worker.py`: one arXiv search per subtopic, `SubtopicTask` payload (D-071),
+      catch list per D-072 and D-065 → `test_research_worker.py` (14)
+- [x] `nodes/decompose.py`: planner + the three hard filters (D-070, D-073) → `test_decompose.py` (16)
+- [x] `graph.py`: `route_subtopics` conditional edge (D-069), rewired
+      `intake → decompose → Send → research_worker → synthesize → check_citations`
+- [x] `config.py`: `MAX_SUBTOPICS = 3`, `ARXIV_MIN_INTERVAL_SECONDS = 3.0`
+- [x] Fan-out behaviour and reducers under parallel writes → `test_fanout.py` (14)
+- [x] `test_graph.py` updated for the milestone 3 contract (node order, the limiter argument,
+      two scripted model replies)
+
+**Next:**
+- [ ] Integration test: milestone 3 changed the graph, so the paid run should be repeated
+- [ ] Commit, then record the hash here
+
+**Three things measured while building this** (all in `decisions.md`):
+- **An empty `Send` list ends the run silently** — no error, no downstream node, no review.
+  Reachable whenever every proposal is already explored, hence D-069's guard.
+- **`Send` payloads are checkpointed**, so a custom payload class comes back as a plain `dict`
+  on *resume* with only a logged warning (D-071). Invisible to any start-to-finish test.
+- **A token-bucket limiter allows 2 concurrent arXiv connections**; arXiv permits one (D-064).
+
+**Known follow-up:** `nodes/search.py` is now unused — `research_worker` replaced it. Delete it and
+its `code-map.md` entry, or keep it deliberately.
 
 ## Milestone 2: one real source, arXiv
 

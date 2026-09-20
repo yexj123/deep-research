@@ -79,6 +79,10 @@ and what was rejected. It's the answer to "why did you do it this way?"
   cause. Without strict mode, the type is restored but LangGraph warns that this "will be
   blocked in a future version." Separately, a plain dataclass's `tuple` fields come back as
   `list`s; a Pydantic dataclass converts them back when it's restored.
+- **Scope extended (2026-09-20, D-071):** this rule is not limited to types stored in state.
+  A pending `Send` payload is checkpointed too, and a custom payload class hits the identical
+  silent-`dict` failure — but only on a **resumed** run, so no start-to-finish test catches it.
+  `Send` payloads are `TypedDict`s for that reason.
 
 ### D-015 — LLM providers: OpenAI default, DeepSeek selectable per run
 - **Decision:** the UI chooses the provider for each run. The choice reaches nodes
@@ -644,6 +648,160 @@ and what was rejected. It's the answer to "why did you do it this way?"
 - **Rejected:** `MODELS_BY_ROLE` in config, which would allow tuning cost against quality per role
   (a cheap planner, a stronger synthesizer). Deferred, not dismissed — revisit with real token-cost
   numbers from the thesis evaluation runs rather than by guessing now.
+
+### D-067 — Milestone 3 state fields and their reducers
+- **Decision:**
+
+  | Field | Writers | Reducer |
+  |---|---|---|
+  | `pending_subtopics: list[str]` | `decompose` | **none** — overwritten each round (D-017) |
+  | `explored_subtopics: Annotated[list[str], merge_subtopics]` | workers, parallel | dedup on `casefold` + `strip`, **storing the original text** |
+  | `failed_subtopics: Annotated[list[str], operator.add]` | workers, parallel | plain concat — duplicates are the attempt count (D-020) |
+  | `seen_paper_ids: Annotated[set[str], operator.or_]` | workers, parallel | set union |
+  | `sources: Annotated[list[Source], merge_sources]` | workers, parallel | dedup on `arxiv_id`, keep first |
+  | `skipped_entries: Annotated[int, operator.add]` | workers, parallel | sum of per-worker **deltas** |
+  | `depth: int` | `gap_check` | none — single writer |
+
+- **Why `sources` and `skipped_entries` need reducers now:** at milestone 2 each state field had
+  exactly one writer, which is why no reducers existed. `search` becoming a parallel `Send` worker
+  ends that invariant. Without a reducer LangGraph raises `InvalidUpdateError` — loudly, not
+  silently (D-014's correction note).
+- **Why `sources` dedups on `arxiv_id` rather than on the `Source` object:** two subtopics can
+  retrieve the same paper, and they can retrieve *different versions* of it. `Source` is frozen and
+  hashable, so a `set[Source]` would compile and still keep v1 and v2 as two entries for one paper,
+  defeating D-044's canonical-ID rule. Keying on `arxiv_id` collapses them correctly. First-seen
+  order is preserved so the `<papers>` block is stable across runs, which a `set` would not give.
+- **Why the original subtopic text is stored, not the normalized form:** normalization is a
+  *comparison* concern. Storing `"attention in bert"` would leak lowercased text into the planner
+  prompt, the review's coverage section and the UI. The reducer normalizes to compare and keeps what
+  the planner wrote.
+- **Confirmed 2026-09-20:** a `set[str]` in state survives a checkpoint round trip through
+  `build_serializer()` and comes back as a `set`, so `seen_paper_ids` needs no allowlist entry —
+  `set` is a builtin, not a custom type (D-014 applies only to custom classes).
+- **Sharp edge:** with `operator.add` on `skipped_entries`, a node must return its own **delta**
+  (`{"skipped_entries": result.skipped}`), never a running total, or the count compounds. Pinned by
+  a test.
+- **Reducers must not mutate their left argument.** LangGraph may still hold a reference to it.
+  `operator.add` and `operator.or_` both build new objects; `merge_subtopics` and `merge_sources`
+  copy before appending. A reducer like `lambda a, b: a.extend(b) or a` is wrong twice over — it
+  mutates, and it returns `None`.
+
+### D-068 — `Send` dispatch order is observed, not guaranteed; tests assert order-insensitively
+- **Decision:** assertions on fields written by parallel workers compare sorted lists or sets. One
+  dedicated test asserts exact dispatch order and is documented as pinning observed behavior.
+- **Why:** measured 2026-09-20 on langgraph 1.2.11 — five workers sleeping 50/10/40/20/30 ms
+  produced dispatch order (`a,b,c,d,e`) on three consecutive runs, not completion order; `b`
+  finished first and landed second. So ordering *is* currently deterministic, which is what makes
+  the `<papers>` block reproducible for the thesis evaluation. But it is **not a documented
+  LangGraph contract**, and a minor release could change it.
+- **Why one pinning test rather than none:** if the behavior changes, the failure should be one
+  clearly-labelled test naming the assumption, not several unrelated-looking tests going red at
+  once. Reproducibility is worth knowing about; it is not worth depending on silently.
+- **Rejected:** asserting exact order everywhere (couples the whole suite to an undocumented
+  detail); asserting nothing about order (loses the reproducibility signal entirely).
+
+### D-069 — An empty subtopic list routes to `synthesize`, never to an empty fan-out
+- **Decision:** `route_subtopics` returns the node name `"synthesize"` when `pending_subtopics` is
+  empty, and a list of `Send` objects otherwise. It lives in `graph.py`, because it encodes node
+  ordering (code-map rule 2: only `graph.py` knows what runs when).
+- **Why:** measured 2026-09-20 — a conditional edge returning `[]` produces **no error and no
+  downstream node**. The graph ran the planner and stopped, with no review written. An empty list
+  is reachable in a later round when every proposed subtopic is already explored or has hit the
+  N=2 retry cap (D-020), which is a legitimate *success* state, not a failure. Falling off the end
+  silently is the same shape as D-062 and D-063: reporting completion while producing nothing.
+- **Confirmed:** one conditional edge may return a bare node name in one branch and `Send` objects
+  in another — `pending=[]` routed `plan → synthesize`, `pending=["a","b"]` routed
+  `plan → worker:a, worker:b → synthesize`.
+- **Rejected:** having `decompose` raise when it filters everything out (it is a valid end state,
+  not an error); adding a separate guard node (an extra super-step, and it splits the guard from
+  the routing it guards).
+
+### D-070 — `decompose`: explicit JSON validation, and a planner failure crashes the run
+- **Decision:** the prompt asks for JSON; the node parses it with
+  `SubtopicPlan.model_validate_json(reply.text)`. `decompose` catches nothing at milestone 3, so an
+  unparseable plan raises `ValidationError` and fails the run.
+- **Why explicit validation over `with_structured_output`:** D-013 requires external data to be
+  validated *in the node that receives it*, and a model's reply is external data. It also behaves
+  identically on both providers, where `with_structured_output` routes through tool calling and
+  binds without error even on a model that cannot honor it (D-066). Keeping the parse in the node
+  means the `ValidationError` is ours to route.
+- **Why a failure crashes:** the same reasoning as D-053 for milestone 2's `search`. With a single
+  planner there is nothing to continue with, so catching would hide it. `decompose` is **not** a
+  `Send` worker, so D-048's catch list does not apply to it.
+- **Revisit at milestone 4:** once `gap_check` can re-plan, a repair retry (re-asking with the
+  validation error in the prompt) becomes worthwhile — D-015 notes DeepSeek occasionally returns
+  empty content, so the expected value is real. Rejected for now as a second paid call and an
+  untested path.
+- **Rejected:** falling back to searching the original question as one subtopic. It keeps the run
+  alive but silently downgrades a recursive review to a milestone-2 one — the failure shape this
+  project has now hit three times (D-062, D-063, D-069).
+- **The division of labour worth stating:** the planner *proposes*; the code *decides*. The
+  explored list in the prompt is a soft filter (D-022); the hard filters are the normalized-match
+  check and the N=2 retry cap (D-020), both applied in `decompose` after the model replies. The
+  third filter — ≥60% paper overlap — cannot run here because it needs search results, so it stays
+  in the worker (D-022, D-028).
+
+### D-071 — `Send` payloads are checkpointed, so they are plain dicts (`TypedDict`) (extends D-014)
+- **Decision:** a `Send` payload is a `TypedDict` (`SubtopicTask`), never a dataclass or Pydantic
+  model. At runtime it is an ordinary `dict`, so msgpack handles it natively and no allowlist entry
+  is needed, while the type checker still sees the shape.
+- **Why:** measured 2026-09-20. A pending `Send` is saved in the checkpoint, so its payload goes
+  through the same serializer as state. With a custom frozen dataclass payload, a **resumed** run
+  logged `Blocked deserialization of Payload - not in allowed_msgpack_modules` and handed the
+  worker a plain `dict`. `payload.subtopic` would then raise `AttributeError`.
+- **Why this is worse than the state version of the same bug:** it is invisible in every test that
+  runs a graph start-to-finish. It only appears after an interrupt-and-resume, which is exactly the
+  path the web layer uses at milestone 5.
+- **D-014's scope was too narrow.** It says "every custom type *stored in state*". `Send` payloads
+  are subject to the identical rule. A `TypedDict` sidesteps it entirely, which is why it is
+  preferred over allowlisting a payload class.
+- **Rejected:** a plain untyped `dict` (same runtime safety, no type checking); a dataclass payload
+  plus an allowlist entry (works, but adds a type to the allowlist purely for transport, and the
+  failure mode when someone forgets is silent).
+
+### D-072 — `research_worker`: contract and catch list
+- **Decision:** `make_research_worker(http_client, limiter)` returns an async node taking a
+  `SubtopicTask` payload (D-071). On success it returns `sources`, `skipped_entries` (its own
+  delta, D-067), `explored_subtopics: [subtopic]` and `seen_paper_ids`. On a caught failure it
+  returns **only** `failed_subtopics: [subtopic]` — never `explored_subtopics`, because a subtopic
+  counts as explored only on success (D-018).
+- **Catch list** — D-048 plus D-053's promise that `ArxivAPIError` joins here, refined by D-065:
+  `httpx.TransportError`, `pydantic.ValidationError`, `xml.etree.ElementTree.ParseError`,
+  `defusedxml.DefusedXmlException` and `ArxivAPIError` are recorded as failures.
+  `httpx.HTTPStatusError` is recorded **only** for `429` and `5xx`; every other 4xx is re-raised
+  (D-065). `BaseException` is never caught, so `asyncio.CancelledError` propagates (D-023).
+- **Every arXiv request is made inside `async with limiter:`** (D-064). The limiter wraps the
+  request, not just its start.
+- **Zero results is a success** (D-021): the subtopic is marked explored with an empty `sources`.
+
+### D-073 — `decompose` also drops subtopics `build_search_query` can't use (settles a D-059 item)
+- **Decision:** alongside the explored-match and N=2 retry-cap filters, `decompose` drops any
+  proposed subtopic for which `build_search_query` raises `ValueError` — i.e. one made only of
+  stopwords and punctuation (D-059).
+- **Why here and not in the worker:** `ValueError` is not on the worker's catch list (D-048), so an
+  all-stopword subtopic would crash the whole run. Catching it in the worker instead would burn two
+  retry-cap attempts (D-020) on something that fails identically every time, since the failure is
+  deterministic. `decompose` is the place where "don't dispatch it" is an available response.
+- **Rejected:** letting it crash (one bad subtopic out of three kills a run that could have
+  delivered the other two); catching `ValueError` in the worker (wastes the retry cap, and widening
+  that catch would also swallow `ValidationError` from genuine bugs).
+
+### D-074 — The ≥60% paper-overlap check is deferred to milestone 4
+- **Decision:** the worker does **not** implement D-022's overlap rule at milestone 3. It writes
+  `seen_paper_ids` so the data is ready, and the `Send` payload carries `seen_paper_ids` so the
+  plumbing is tested, but no overlap comparison is made yet.
+- **Why:** D-022 was written as "a proposed subtopic is *skipped* if ≥60% of its results are already
+  seen", which assumes the check runs before dispatch. It cannot — overlap needs search results, so
+  by the time it is computable the search is already paid for. Once redundant subtopics keep their
+  papers (the ~40% that are new are real findings the search already bought) and are marked
+  explored like any other, the comparison produces **no observable difference** in the returned
+  update. Implementing it now would be dead code.
+- **Its real consumer is `gap_check`** deciding whether a round found anything new, which arrives at
+  milestone 4 along with the state field needed to record redundancy. Building it then means the
+  field is justified by an actual reader rather than added speculatively.
+- **Consequence:** D-022's wording should be read as "don't *re-explore* it", not "discard its
+  results". D-028's ≥3-results floor and D-021's zero-results path are unaffected and still apply
+  when the check lands.
 
 ## Open (proposed, not decided)
 

@@ -19,3 +19,11 @@ LLM_MAX_RETRIES: int = 2
 # Values fixed by arXiv's format (URL, XML namespaces, ID patterns) live in sources/arxiv.py.
 ARXIV_MAX_RESULTS: int = 10
 ARXIV_TIMEOUT_SECONDS: float = 30.0
+# arXiv's terms: no more than one request every three seconds. Applied by the
+# ArxivRateLimiter the caller passes into build_graph (D-042, D-064).
+ARXIV_MIN_INTERVAL_SECONDS: float = 3.0
+
+# How many subtopics the planner proposes per round (D-070). Small on purpose: arXiv access is
+# serialized at one request per ARXIV_MIN_INTERVAL_SECONDS (D-064), so subtopics x rounds is
+# wall-clock time. At max_depth = 2 this is 3 rounds x 3 subtopics ~ 27 s of rate-limit waiting.
+MAX_SUBTOPICS: int = 3
