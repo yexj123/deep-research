@@ -541,36 +541,256 @@ and what was rejected. It's the answer to "why did you do it this way?"
   produce false positives. `test_known_limit_citation_without_brackets_is_invisible` marks that
   boundary.
 
+### D-063 — `build_search_query` keeps non-ASCII letters (closes an Open item, refines D-051)
+- **Decision:** `PUNCTUATION_PATTERN = re.compile(r"[^\w\s]")`. Python 3's `\w` is Unicode-aware by
+  default, so accented Latin, CJK and Cyrillic letters survive as search terms while arXiv's query
+  syntax is still stripped.
+- **Why:** the old `[^a-zA-Z0-9\s]` treated every non-ASCII letter as punctuation, so "Schrödinger"
+  became `all:schr AND all:dinger`. Measured against the real API on 2026-09-20:
+
+  | query sent | `totalResults` | top hit |
+  |---|---|---|
+  | `all:schrödinger` | **20,184** | *Optomechanical Schrödinger Cats* |
+  | `all:schrodinger` | 4,900 | *…nonlinear Schrodinger equation…* |
+  | `all:schr AND all:dinger` (old) | 903 | *…Korteweg-de Vries…* — unrelated |
+
+  The old behavior was not merely lossy: it returned confident nonsense. Two meaningless fragments
+  ANDed together still match ~900 papers, none of them the right ones. Under D-021 a near-empty
+  result is recorded as a *success*, so this failed silently on much of physics and most
+  non-English author names.
+- **Confirmed:** arXiv accepts UTF-8 in `search_query` — httpx percent-encodes `ö` as `%C3%B6` and
+  the API returns HTTP 200 with relevant results. arXiv does **not** fold accents internally; the
+  accented and unaccented forms are genuinely different queries, which is why the fix must preserve
+  the accent rather than normalize it.
+- **Verified:** `[^\w\s]` still strips every arXiv syntax character — `:`, `"`, `(`, `)`, `+`, `-`,
+  `[`, `]`, `^` — so D-051's injection protection is unchanged.
+- **Rejected:** NFKD normalization to ASCII, then the old pattern. It measures *worse* (4,900 vs
+  20,184), `ß` doesn't decompose so German terms are still shredded, and CJK survives the fold only
+  to be deleted by the ASCII pattern. Also rejected: blacklisting arXiv's syntax characters
+  explicitly — more precise, but it's a list that must be kept in sync with their query grammar and
+  fails open if they add an operator.
+- **Known limits:** `\w` also keeps `_`, which is harmless inside a term. `STOPWORDS` is still
+  English and ASCII only, so a non-English question keeps its stopwords — they become search terms
+  rather than being dropped. That's a smaller problem than deleting the letters.
+
 ## Open (proposed, not decided)
 
-- **A public entry function.** Revisit at the web-layer milestone: a wrapper that
-  requires `context`, in addition to the check in `intake` (D-033).
-- **Models per role.** The planner, gap checker and synthesizer each get a
-  configured model. The app refuses to start if a role that needs structured
-  output gets a model without it. The factory itself is decided (D-029).
-- **Treat 4xx and 5xx differently (D-027).** Catching every `HTTPStatusError` also
-  catches 400/404 errors caused by bugs in your own request code, which would then
-  count toward the retry cap instead of crashing. Proposed: treat 429 and 5xx as
-  external failures and re-raise other 4xx.
-- **Making failures visible.** Proposed: a `custom` stream event, plus a coverage
-  limitations section in the review listing failed and zero-result subtopics.
-- **Prompt-injection defenses.** Decided so far: citation IDs restricted to the retrieved set
-  (D-046); a citation the checker can't parse is reported rather than ignored, so a malformed
-  marker can't pass as grounded (D-062); retrieved papers passed as a delimited data block
-  (D-055). Still proposed: no tools with
-  side effects; sanitize LLM output before it's rendered. Known gap in D-055's block: an abstract
-  containing the literal text `</papers>` would close the block early.
-- **Non-ASCII terms are destroyed by `build_search_query`.** `PUNCTUATION_PATTERN`
-  (`[^a-zA-Z0-9\s]`) treats every non-ASCII letter as punctuation, so "Schrödinger" becomes
-  `all:schr AND all:dinger` — two terms that match nothing, ANDed together, yielding zero results,
-  which D-021 records as a *success*. Logged as a known limit under D-059; raised to Open on
-  2026-09-20 because it silently fails on much of physics and most non-English author names.
-  Proposed: `[^\w\s]` with Python 3's default Unicode `\w`, which keeps accented letters while
-  still stripping arXiv's query syntax (`:`, `"`, parentheses). Verify arXiv accepts UTF-8 in
-  `search_query` before changing it.
-- **arXiv rate limit** (≤1 request every 3 s) under parallel `Send`: where the
-  limiter lives.
-- **`recursion_limit` value.** `max_depth` is set (D-025); the backstop value
-  isn't.
-- **Frontend: SvelteKit or htmx** (at the web-layer milestone; if SvelteKit, add
-  `node_modules/`, `.svelte-kit/` and the build output folder to `.gitignore`).
+Each item lists the real options with their tradeoffs and a recommendation. A recommendation
+here is **not** a decision — it moves into the log with a new ID only once confirmed.
+Grouped by the milestone that forces the choice.
+
+---
+
+### Needed for milestone 3 (`decompose` + `Send` fan-out)
+
+#### O-1 — Where the arXiv rate limiter lives
+
+**Problem.** arXiv's terms allow "no more than one request every three seconds" and "a single
+connection at a time" (D-042). Milestone 3 fans out to parallel `Send` workers, each wanting to
+search.
+
+**The reframe that decides it:** arXiv's terms make parallel *searching* non-compliant no matter
+how it is implemented. So the question is not "how do we parallelize arXiv" — it is "what is
+actually parallel". Answer: the LLM work (reading, summarizing, gap analysis). arXiv access is a
+serialized queue that parallel workers take turns on.
+
+| Option | Pros | Cons |
+|---|---|---|
+| **A. A shared async limiter passed into `build_graph`**, alongside the HTTP client — an `asyncio.Semaphore(1)` plus monotonic-clock spacing | Enforces *both* rules in one object. Same dependency-injection pattern as D-032/D-049, so it is visible in the signature and swappable in tests (a zero-delay limiter keeps the suite fast) | One more constructor parameter. Must be created inside the running loop — a module-level `Semaphore` binds to the wrong event loop and breaks across tests |
+| **B. Transport-level, inside `httpx`** — `Limits(max_connections=1)` plus a custom transport that sleeps | Invisible to node code; impossible to forget | `max_connections=1` gives serialization but *not* the 3-second spacing, so it only solves half. A custom transport hides timing where no one looks, and is awkward to assert on |
+| **C. Serialize the whole search step** — fan out planning, but run searches in a loop | Trivially correct, nothing to build | Throws away the concurrency of the LLM work too, which is the only real win available |
+
+**Recommendation: A.** It is the only option that enforces both rules, and it keeps the project's
+existing "caller owns the dependency" rule intact. State plainly in the entry that arXiv access is
+serialized *by policy*, so nobody later reads the serialization as a performance bug and "fixes" it.
+
+#### O-2 — Treat HTTP 4xx and 5xx differently (refines D-027)
+
+**Problem.** D-027/D-048 catch every `httpx.HTTPStatusError` as an external failure, so it counts
+toward the N=2 retry cap (D-020) and is then silently dropped.
+
+**Concrete harm, confirmed 2026-09-20:** arXiv serves its error feed with **HTTP 400**
+(`test_search_arxiv_raises_on_http_400`), so `raise_for_status()` fires before `parse_feed` runs.
+A malformed query — a bug in `build_search_query`, exactly the class D-059 warns about — would be
+retried twice and recorded as "subtopic failed". A bug would masquerade as an unlucky network.
+Side effect: `ArxivAPIError` is currently unreachable through `search_arxiv`, and is only exercised
+by tests calling `parse_feed` directly.
+
+| Option | Pros | Cons |
+|---|---|---|
+| **A. Retry 429 and 5xx; re-raise every other 4xx** | Matches D-023's fail-fast rule: 4xx means *we* sent something wrong. A bug crashes loudly instead of being absorbed | One more branch in the worker. A genuinely transient 4xx (rare) becomes fatal |
+| **B. Status quo — catch everything** | Simplest; a run never dies mid-way | A query-building bug is indistinguishable from arXiv being down. Already demonstrated above |
+| **C. Explicit status map** — `{429, 500..599}` retry, `{400, 404}` crash, anything else crash | Most precise, self-documenting, easy to test per status | A table to maintain; over-engineered for one source today, but milestone 3+ adds more |
+
+**Recommendation: A now, C when a second source lands.** Worth deciding at the same time whether
+`ArxivAPIError` should be raised *before* `raise_for_status()`, so arXiv's own error text
+("incorrect id format") reaches the log instead of a bare `400 Bad Request`.
+
+#### O-3 — Models per role
+
+**Problem.** The planner, gap checker and synthesizer have different needs. The planner and gap
+checker want structured output; the synthesizer wants prose and streams to the browser. D-015
+records that DeepSeek's reasoning model supports neither tool calling nor structured output, so a
+per-run provider choice can silently break a role.
+
+| Option | Pros | Cons |
+|---|---|---|
+| **A. `MODELS_BY_ROLE` in config + a startup check** that refuses to start if a structured-output role gets a model that cannot do it | Fails at startup with a clear message, not mid-run. The factory already exists (D-029) | Needs a per-model capability table that must track provider changes — a maintenance burden and a source of wrong "unsupported" errors |
+| **B. Per-role providers in `RunContext`** | The UI could choose per role | Mixes run data with wiring, which D-032 explicitly rejected. Multiplies the UI surface for a choice nobody asked for |
+| **C. One model for every role (status quo), with the structured-output guard only** | Nothing to build. The provider choice stays one dropdown | A cheap model that is fine for planning is also used for synthesis, and vice versa — no way to tune cost against quality |
+
+**Recommendation: C plus the guard, until a role actually needs a different model.** The real
+requirement hiding inside this item is the *guard*, not the per-role table: a run that will fail
+because DeepSeek cannot do structured output should fail at `intake`, next to the other context
+checks (D-033), not three nodes in. Build the guard at milestone 3; defer the table.
+
+---
+
+### Needed for milestone 4 (`gap_check` + recursion)
+
+#### O-4 — The `recursion_limit` backstop value
+
+**Problem.** `max_depth = 2` is the real exit (D-009, D-025); `recursion_limit` is only the
+backstop for when the depth exit is broken. Its value was never chosen.
+
+**Measured 2026-09-20:** the milestone-2 graph (4 sequential nodes) needs `recursion_limit=5`;
+4 raises `GraphRecursionError`. So the limit must be **super-steps + 1**, one more than intuition
+suggests. A `Send` fan-out is a single super-step regardless of worker count.
+
+Projected milestone-4 arithmetic — `intake` (1) + 3 rounds x [`decompose` + workers + `gap_check`]
+(9) + `synthesize` + `check_citations` (2) = **12 super-steps, so >= 13**.
+
+| Option | Pros | Cons |
+|---|---|---|
+| **A. 15 — tight, just above the real need** | A broken depth exit trips it almost immediately, which is the entire point of a backstop | Any graph change needs the number revisited, or a legitimate run dies |
+| **B. 25 — LangGraph's default** | Nothing to justify; comfortable headroom | Roughly 2x the real need, so a runaway loop burns about twice as many paid calls before stopping |
+| **C. Derive it: `max_depth * 3 + 4`** | Self-adjusting when `max_depth` is tuned in the thesis evaluation | Hides a magic formula that silently goes wrong if the per-round node count changes |
+
+**Recommendation: A (15), with a test asserting a normal full-depth run completes under it.** That
+test is what makes the number defensible and catches the graph outgrowing it. Re-measure when the
+milestone-4 graph actually exists — the arithmetic above is projection, not measurement.
+
+#### O-5 — Making failures visible
+
+**Problem.** Failed and zero-result subtopics are currently invisible in the output. A review
+silently missing a third of its subtopics looks identical to a complete one — the same failure
+shape as D-062.
+
+| Option | Pros | Cons |
+|---|---|---|
+| **A. State fields only** (`failed_subtopics` exists already), rendered by whatever reads state | Checkpointed, deterministic, testable without a browser. Single source of truth | Nothing surfaces until the run ends |
+| **B. A `custom` stream event per failure** | Live feedback during a long run, which is the main UX complaint a demo will hit | Ephemeral — a reconnecting browser misses it. Not testable without streaming |
+| **C. Both: state is the record, `custom` is the notification** | Live *and* durable | Two code paths that can disagree about what counts as a failure |
+
+**Recommendation: A first, then C at milestone 5,** with `custom` events derived from the same
+state update so they cannot drift. Add a "Coverage and limitations" section to the review listing
+failed and zero-result subtopics — for a literature review that section is a *finding*, not an
+apology, and it is the kind of honesty an advisor rewards.
+
+---
+
+### Needed for milestone 5 (web layer)
+
+#### O-6 — Frontend: SvelteKit or htmx
+
+**Problem.** The app is fundamentally "stream text into a page, show node progress, list saved
+reviews". Both stacks can do it.
+
+| Option | Pros | Cons |
+|---|---|---|
+| **htmx** (no `frontend/`; templates live in `api/`) | No second toolchain, no build step, no `node_modules`, nothing to deploy separately. SSE maps directly onto the existing design (D-006). Far less surface to defend | Streaming *markdown* is the hard part and still needs a JS library, so "no JavaScript" is not quite true. Run history and re-render logic get awkward as state grows |
+| **SvelteKit** (a real `frontend/`) | A proper component model for token-by-token rendering and run history. A more polished demo | A whole second toolchain, build step and deploy story for a project whose thesis value is entirely in the agent. More code you must be able to defend |
+| **Server-rendered HTML + a small vanilla JS `EventSource`** | Smallest possible dependency set; the SSE client is ~20 lines you fully understand | You hand-roll what a framework gives free; grows into a bad framework if the UI expands |
+
+**Recommendation: htmx, and verify the SSE story before committing.** The deciding argument is
+that every hour on the frontend is an hour not spent on recursion and citation grounding, which is
+what the thesis is actually about. **Verify first** (do not take this from memory): that htmx's SSE
+extension can append streamed tokens into a live-rendering markdown block, since that is the one
+requirement that could rule it out.
+
+#### O-7 — A public entry function
+
+**Problem.** `intake` validates the run context (D-033), but every caller still assembles
+`RunContext` and the config dict by hand.
+
+| Option | Pros | Cons |
+|---|---|---|
+| **A. A `run_research(question, provider, thread_id)` wrapper** owning context, config and stream modes | One place to get it right; the API route stays thin; the signature documents what a run needs | Another layer to keep in sync with the graph; tests that want raw `astream` bypass it anyway |
+| **B. Status quo — rely on `intake`** | Nothing to build; the graph stays the only interface | The web layer will rebuild the same context in at least two routes (start and resume), so the duplication is guaranteed rather than hypothetical |
+
+**Recommendation: A at milestone 5, not before.** Its real shape only becomes clear once the routes
+exist, and writing it now means guessing at the signature.
+
+---
+
+### Ongoing / not milestone-gated
+
+#### O-8 — Prompt-injection defenses
+
+**Decided so far:** citation IDs restricted to the retrieved set (D-046); an unparseable marker
+reported rather than ignored (D-062); papers passed as a delimited data block (D-055).
+
+**The known gap:** an abstract containing the literal text `</papers>` closes D-055's block early,
+so the rest of that abstract is read as instructions rather than data.
+
+| Option | Pros | Cons |
+|---|---|---|
+| **A. A random nonce in the delimiter** — `<papers-a3f91c>` ... `</papers-a3f91c>`, generated per call | Untrusted text cannot guess the delimiter, which closes the gap completely rather than filtering for it. Standard practice | The prompt looks slightly odd; the nonce must be threaded from builder to prompt |
+| **B. Strip or escape `</papers>` in abstracts** | A two-line change | A blacklist: it fixes this one string and nothing else. Casing and whitespace variants slip past |
+| **C. Drop tag delimiters entirely** — a numbered list framed as data | No closing tag to forge | Weaker visual boundary for the model, and no evidence it resists injection better |
+
+**Recommendation: A.** Cheap, complete for this gap, and easy to test — feed an abstract containing
+`</papers>` and assert the block still encloses every paper.
+
+**Still open beyond this:** no tools with side effects (easy to hold now, worth writing down before
+tools exist), and sanitizing model output before the browser renders it — a review is
+model-authored markdown going into a page, so it is an XSS path unless rendered safely. That one
+belongs with milestone 5.
+
+#### O-9 — Search both spellings of an accented term (from D-063)
+
+**Problem.** `all:schrödinger` (20,184 results) and `all:schrodinger` (4,900) are different sets.
+Authors spell it both ways and older ASCII-era submissions use the bare form. Neither contains the
+other, so keeping only the accented form still misses papers.
+
+| Option | Pros | Cons |
+|---|---|---|
+| **A. `(all:<term> OR all:<folded>)` when a term has non-ASCII letters**, folding via NFKD | Covers both spellings; targeted, since it only fires on affected terms | A more complex query string to debug. `ß` does not decompose under NFKD, so German is still partly broken. Unmeasured — it may add noise as well as recall |
+| **B. Status quo (D-063): accented form only** | Simple, and already 22x better than the old behavior | Still misses ~4,900 papers on the motivating example |
+| **C. Measure first in `notebooks/`, then decide** | The thesis needs a recall measurement anyway; this is exactly that experiment | Leaves the gap open in the meantime |
+
+**Recommendation: C, then A if the numbers justify it.** This is a recall question, and guessing at
+recall is how you end up defending a number you never measured.
+
+#### O-10 — Stopwords are English and ASCII only
+
+**Problem.** `STOPWORDS` holds English words, so `квантовые вычисления` keeps both tokens and ANDs
+them into the query.
+
+| Option | Pros | Cons |
+|---|---|---|
+| **A. Accept it, document it** | Zero work. The failure is *narrowing*, not corrupting — unlike D-063's bug, the terms are real words from the question | A long non-English question ANDs many low-value terms and can return nothing, which D-021 records as a success |
+| **B. Drop tokens shorter than 3 characters** | Language-agnostic, catches most function words | Crude: kills legitimate short terms like "AI", "ML", "3D" |
+| **C. Per-script stopword lists** | Correct | Real scope: a list per language, plus language detection, for a use case that may never arrive |
+
+**Recommendation: A.** The honest framing is that this app is English-first today. Revisit only if
+non-English questions become a real use case — and note that a *long* question is the sharper
+version of this problem, English or not, since D-051 already warns that ANDing many terms can
+return nothing.
+
+---
+
+### Summary
+
+| # | Item | Recommendation | Needed by |
+|---|---|---|---|
+| O-1 | arXiv rate limiter | Shared limiter passed into `build_graph`; arXiv serialized by policy | Milestone 3 |
+| O-2 | 4xx vs 5xx | Retry 429 + 5xx, re-raise other 4xx | Milestone 3 |
+| O-3 | Models per role | One model + a structured-output guard in `intake`; defer the table | Milestone 3 |
+| O-4 | `recursion_limit` | 15, plus a test that a full-depth run fits | Milestone 4 |
+| O-5 | Failures visible | State first, `custom` events later; add a limitations section | Milestone 4 |
+| O-6 | Frontend | htmx — but verify its SSE + streaming-markdown story first | Milestone 5 |
+| O-7 | Public entry function | Build it at milestone 5, once the routes exist | Milestone 5 |
+| O-8 | Prompt injection | Nonce delimiter; output sanitizing at milestone 5 | Any time |
+| O-9 | Accent spellings | Measure recall first, then decide | Any time |
+| O-10 | Non-English stopwords | Accept and document | Any time |

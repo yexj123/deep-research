@@ -332,7 +332,7 @@ The graph code is identical in all three columns. Only the dependencies passed i
 | `SYSTEM_PROMPT` | `nodes/synthesize.py` | `synthesize` | D-046, D-055 |
 | `NO_SOURCES_REVIEW` [M2] | `nodes/synthesize.py` | `synthesize`, `test_graph.py` | D-060 |
 | `ARXIV_API_URL`, `NAMESPACES`, `_ENTRY_ID_PATTERN` | `sources/arxiv.py` | `arxiv.py` only (fixed by arXiv, not settings) | D-042, D-044 |
-| `STOPWORDS`, `PUNCTUATION_PATTERN` | `sources/arxiv.py` | `build_search_query` | D-051, D-059 |
+| `STOPWORDS`, `PUNCTUATION_PATTERN` | `sources/arxiv.py` | `build_search_query` | D-051, D-059, D-063 |
 | `ARXIV_ID_PATTERN` | `sources/models.py` | `Source` validator | D-041, D-056 |
 | `CITATION_MARKER` | `nodes/check_citations.py` | `check_citations`; must match `SYSTEM_PROMPT` | D-046 |
 | `CITATION_BRACKET` [M2] | `nodes/check_citations.py` | `check_citations`: finds citation attempts the strict marker can't parse | D-062 |

@@ -120,6 +120,55 @@ def test_build_search_query_rejects_a_question_of_only_stopwords() -> None:
         build_search_query("What is it?")
 
 
+def test_build_search_query_keeps_accented_letters_whole() -> None:
+    """"Schrödinger" stays one term instead of splitting into "schr" and "dinger" (D-063).
+
+    The ASCII-only pattern treated every non-ASCII letter as punctuation. Measured against
+    the real API on 2026-09-20: all:schrödinger matched 20,184 papers, while the split form
+    all:schr AND all:dinger matched 903 whose top hit was an unrelated Korteweg-de Vries
+    paper. The old behavior didn't just narrow the search, it matched the wrong papers.
+    """
+    assert build_search_query("Schrödinger equation") == "all:schrödinger AND all:equation"
+
+
+@pytest.mark.parametrize(
+    ("question", "expected"),
+    [
+        ("Gödel incompleteness", "all:gödel AND all:incompleteness"),
+        ("naïve Bayes classifier", "all:naïve AND all:bayes AND all:classifier"),
+        ("量子コンピュータ", "all:量子コンピュータ"),
+        ("квантовые вычисления", "all:квантовые AND all:вычисления"),
+    ],
+)
+def test_build_search_query_preserves_non_ascii_scripts(question: str, expected: str) -> None:
+    """Latin accents, CJK and Cyrillic all survive as terms (D-063).
+
+    arXiv accepts UTF-8 in search_query (confirmed 2026-09-20: httpx percent-encodes it and
+    the API returns HTTP 200 with relevant results), so there is no reason to strip them.
+    """
+    assert build_search_query(question) == expected
+
+
+def test_build_search_query_still_strips_syntax_from_non_ascii_text() -> None:
+    """Widening the pattern must not let arXiv query syntax through (D-063).
+
+    The regression guard for D-063: the point of PUNCTUATION_PATTERN is stripping `:`, `"`
+    and parentheses so a question can't alter the query's meaning (D-051). Keeping accented
+    letters must not weaken that.
+    """
+    query = build_search_query('Schrödinger: "cat" (paradox)')
+    assert query == "all:schrödinger AND all:cat AND all:paradox"
+
+
+def test_build_search_query_lowercases_non_ascii_terms() -> None:
+    """Non-ASCII terms are lowercased like ASCII ones, so the query is case-stable (D-063).
+
+    Pins that the existing .lower() call is Unicode-aware, which matters now that accented
+    characters actually reach it.
+    """
+    assert build_search_query("SCHRÖDINGER") == "all:schrödinger"
+
+
 # ---- search_arxiv (MockTransport, no network) ----------------------------------------
 
 

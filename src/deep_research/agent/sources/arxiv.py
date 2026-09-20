@@ -24,8 +24,9 @@ STOPWORDS: set[str] = {
 }
 
 
-# Everything that isn't an ASCII letter, digit or whitespace, including arXiv query syntax: " : ( ) (D-051).
-PUNCTUATION_PATTERN = re.compile(r"[^a-zA-Z0-9\s]")
+# Everything that isn't a letter, digit or whitespace, including arXiv query syntax: " : ( ) (D-051).
+# Unicode-aware `\w`, so accented Latin, CJK and Cyrillic letters survive as terms (D-063).
+PUNCTUATION_PATTERN = re.compile(r"[^\w\s]")
 
 # An entry <id>: abstract URL, canonical ID, "v" + version. Entry <id>s use http:// even when the
 # API is called over HTTPS (captured 2026-09-16); https is accepted too. Used with fullmatch.

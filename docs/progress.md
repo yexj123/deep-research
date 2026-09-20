@@ -27,6 +27,9 @@ Backed by `CLAUDE.md`, the output style, and `Edit(/tests/**)`, `Edit(/docs/**)`
 - [x] Run the integration test → **1 passed** (2026-09-20, see below)
 - [x] Two comment fixes in `check_citations.py` from the review (module docstring, `CITATION_BRACKET`)
 - [x] Commit — milestone 2 is `60611ac`; the docs-ownership change is `2db3260`
+- [ ] **D-063 — one-line fix in `sources/arxiv.py`:** `PUNCTUATION_PATTERN = re.compile(r"[^\w\s]")`.
+      7 tests written and red. The old ASCII-only pattern turned "Schrödinger" into
+      `all:schr AND all:dinger`, which matched 903 unrelated papers instead of 20,184 right ones
 
 ## Milestone 2: one real source, arXiv
 
@@ -104,9 +107,13 @@ outcome above. Kept here as the record of what wasn't yours:
 | # | Milestone | Open decisions to settle first (see `decisions.md` → Open) |
 |---|---|---|
 | 2 | One real source (arXiv), single subtopic, citation shape | **Done, ready to commit**: see the Milestone 2 section above (D-040 – D-062) |
-| 3 | `decompose` + `Send` fan-out, reducers | arXiv rate limiter (≤1 req / 3 s) · models per role · treating HTTP 4xx and 5xx differently |
-| 4 | `gap_check` + depth recursion, retry cap, paper overlap | making failures visible · `recursion_limit` value |
-| 5 | Web layer: FastAPI + SSE + `AsyncSqliteSaver` | frontend (SvelteKit or htmx) · public entry function |
+| 3 | `decompose` + `Send` fan-out, reducers | **O-1** arXiv rate limiter · **O-2** 4xx vs 5xx · **O-3** models per role |
+| 4 | `gap_check` + depth recursion, retry cap, paper overlap | **O-4** `recursion_limit` value · **O-5** making failures visible |
+| 5 | Web layer: FastAPI + SSE + `AsyncSqliteSaver` | **O-6** frontend (htmx or SvelteKit) · **O-7** public entry function |
+
+Every open item now carries options, tradeoffs and a recommendation in
+[`decisions.md` → Open](decisions.md#open-proposed-not-decided), numbered `O-1` … `O-10`.
+Not milestone-gated: **O-8** prompt injection · **O-9** accent spellings · **O-10** non-English stopwords.
 
 **Reminders for when these come up:**
 - **Milestone 2 onward:** add every custom Pydantic model or dataclass stored in state to
