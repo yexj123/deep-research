@@ -25,17 +25,15 @@ Backed by `CLAUDE.md`, the output style, and `Edit(/tests/**)`, `Edit(/docs/**)`
       `arxiv.py` comment, and `CITATION_BRACKET` in `check_citations.py` (D-062)
 - [x] Run `uv run pytest` → **66 passed, 1 deselected**
 - [x] Run the integration test → **1 passed** (2026-09-20, see below)
-- [ ] Two comment fixes left in `check_citations.py` from the review: the module docstring still
-      describes the pre-D-062 node, and `CITATION_BRACKET` has no comment explaining why two
-      regexes exist — the least self-evident line in the milestone
-- [ ] Commit, then record the hash here
+- [x] Two comment fixes in `check_citations.py` from the review (module docstring, `CITATION_BRACKET`)
+- [x] Commit — milestone 2 is `60611ac`; the docs-ownership change is `2db3260`
 
 ## Milestone 2: one real source, arXiv
 
 **Goal:** `intake → search → synthesize → check_citations`. The question is searched on arXiv,
 the review cites only retrieved papers, and a `Source` survives a checkpoint.
 
-**Status (2026-09-20):** reviewed, fixed, green — **ready to commit**. `uv run pytest`:
+**Status (2026-09-20):** done, committed as `60611ac`. `uv run pytest`:
 **66 passed, 1 deselected**. `uv run pytest -m integration`: **1 passed** in 11.17s against the real
 OpenAI API and the real arXiv API.
 
@@ -98,7 +96,7 @@ outcome above. Kept here as the record of what wasn't yours:
 - [x] 7. Reviewed (2026-09-20) → D-060, D-061, D-062; tests for the last two written and red
 - [x] 8. Applied the three `src/` fixes → `uv run pytest`: **66 passed, 1 deselected**
 - [x] 9. Integration test run 2026-09-20 → **1 passed** in 11.17s, first attempt
-- [ ] 10. Commit, then record the hash here
+- [x] 10. Committed as `60611ac` (milestone 2) and `2db3260` (docs ownership)
 
 ## Upcoming milestones
 
