@@ -26,10 +26,11 @@ Backed by `CLAUDE.md`, the output style, and `Edit(/tests/**)`, `Edit(/docs/**)`
       ratio is worth keeping as evidence
 - [x] **Measured quality against depth** (D-094, `cf936f0`) — d0/d1/d2 recorded and scored; no detectable
       difference, so `MAX_DEPTH` is *not* being tuned on this data (O-14 says why)
-- [ ] **O-14, step 1: a narrow-question set at d0 vs d2.** The frozen ten are all broad survey
-      prompts — the case least likely to need decomposition. This is the experiment that
-      decides whether recursion stays a feature or becomes an honest negative result. New
-      question set, appended (D-088), not an edit to the existing one
+- [x] **O-14, step 1: a narrow-question set at d0 vs d2** (D-095, `pending`) — recorded and
+      scored; depth fails on intersection questions too, and fails hardest there
+- [ ] **Decide O-14's two `src/` changes** — `MAX_DEPTH = 1`, and a yield-based exit that
+      stops on empty searches. Claude has measured and recommended; the implementation and the
+      call are yours
 - [ ] **`notebooks/`: measure ungrounded citations against depth** (D-079, Open) — the three
       depth arms now exist, so this is a re-score of recorded data rather than new runs
 
@@ -378,6 +379,31 @@ converged* — the exact claim the experiment existed to test. Fixed, and pinned
 `tests/eval/test_recordings_are_consistent.py`, which asserts on committed JSON at zero cost
 that a run using its whole depth budget can never report convergence. Fourth appearance of
 the D-062/D-069/D-084 pattern, first one inside the measuring instrument.
+
+## Depth retested where it should have won — and lost (D-095)
+
+D-094's null result could have been an artifact of asking broad survey questions, so O-14's
+first step was ten **intersection** questions (`questions-narrow.json`) — each spanning two or
+three of the same areas the broad set covers separately, recorded at one round and three.
+
+**Depth fails there too, and fails hardest.** Pooled over both sets, 20 paired questions:
+citations identical (+0.1 SE), specificity **lower** at three rounds (−2.2 SE), for 2.6× the
+papers retrieved. Two metrics clear 2 SE and both favour one round.
+
+**The mechanism is new and is the part worth keeping.** `empty_subtopics` — subtopics arXiv
+had nothing for, which D-021 records as a *success* and every other metric therefore hides —
+goes from 0.0 at one round to **10.9% of all searches** at three on narrow questions. The
+`spec-quant` run decomposes its intersection question correctly and then asks for
+"interactions between decoding and quantization in neural networks", which returns nothing.
+**The planner is not malfunctioning; it is decomposing into literature that was never
+written.** The narrower the intersection, the less exists at it — which is why depth fails
+worst on the questions designed to need it.
+
+**Awaiting your decision (both are `src/`):** `MAX_DEPTH = 1`, and a **yield-based** exit that
+stops when a round's searches come back empty. The yield exit is now the only stopping rule
+with measured support — `empty_subtopics` is the single effect of depth that clears 2 SE, and
+it is free and deterministic. Reasoning, the rejected alternatives, and what would overturn
+the recommendation are in O-14.
 
 ## The specificity metric, validated (D-093)
 

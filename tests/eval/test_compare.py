@@ -111,6 +111,53 @@ def test_metrics_are_paired_by_question_id_not_by_position(
     assert _rows("A", "B")["papers_retrieved"].delta == pytest.approx(0.0)
 
 
+def test_pooling_pairs_within_each_experiment_not_across_them(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two question sets of different difficulty must pool without the gap contaminating it.
+
+    This is the property that makes D-095's 20-question table legitimate. Set B here is
+    uniformly ten times harder than set A, but the *effect* is +1 in both. Pooling the raw
+    means would be swamped by the difficulty gap; pairing inside each experiment first is
+    immune to it, and must recover exactly +1.
+    """
+    arms = {
+        "A0": [_rec("a1", papers=10), _rec("a2", papers=20)],
+        "A1": [_rec("a1", papers=11), _rec("a2", papers=21)],
+        "B0": [_rec("b1", papers=100), _rec("b2", papers=200)],
+        "B1": [_rec("b1", papers=101), _rec("b2", papers=201)],
+    }
+    monkeypatch.setattr(compare, "load_all", lambda arm: arms[arm])
+
+    rows = {r.metric: r for r in compare.pooled([("A0", "A1"), ("B0", "B1")])}
+    assert rows["papers_retrieved"].delta == pytest.approx(1.0)
+    assert rows["papers_retrieved"].n == 4
+
+
+def test_pooling_reports_the_total_sample_size(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`n` must count every paired question, since it is what the standard error divides by.
+
+    Reporting one experiment's n while averaging over both would overstate the error bars,
+    making a real effect look like noise -- or understate them, which is worse.
+    """
+    arms = {
+        "A0": [_rec("a1"), _rec("a2"), _rec("a3")],
+        "A1": [_rec("a1"), _rec("a2"), _rec("a3")],
+        "B0": [_rec("b1"), _rec("b2")],
+        "B1": [_rec("b1"), _rec("b2")],
+    }
+    monkeypatch.setattr(compare, "load_all", lambda arm: arms[arm])
+    assert all(r.n == 5 for r in compare.pooled([("A0", "A1"), ("B0", "B1")]))
+
+
+def test_compare_is_pooling_over_a_single_pair(monkeypatch: pytest.MonkeyPatch) -> None:
+    """One code path, so a two-arm table and a four-arm table cannot drift apart."""
+    a = [_rec("x", papers=1), _rec("y", papers=2)]
+    b = [_rec("x", papers=5), _rec("y", papers=9)]
+    monkeypatch.setattr(compare, "load_all", lambda arm: a if arm == "A" else b)
+    assert compare.compare("A", "B") == compare.pooled([("A", "B")])
+
+
 # ---- the real data: the module must reproduce what the decision log claims -------------
 
 
@@ -140,6 +187,47 @@ def test_the_prompt_size_is_the_mechanism_d094_identifies() -> None:
     rows = _rows("broad-abstract-top20-d0", "broad-abstract-top20-d2")
     assert rows["papers_in_prompt"].delta == pytest.approx(0.0)
     assert rows["papers_in_prompt"].mean_a == pytest.approx(20.0)
+
+
+def test_it_reproduces_the_pooled_depth_result_d095_reports() -> None:
+    """D-095's headline: across both question sets, depth costs specificity (D-095).
+
+    The 20-question pooled table is what lifts specificity past 2 SE, and it is the number the
+    recommendation to lower MAX_DEPTH rests on. Pinned here so that re-recording any arm
+    cannot silently move it while the prose keeps quoting the old figure.
+    """
+    rows = {
+        r.metric: r
+        for r in compare.pooled(
+            [
+                ("broad-abstract-top20-d0", "broad-abstract-top20-d2"),
+                ("narrow-abstract-top20-d0", "narrow-abstract-top20-d2"),
+            ]
+        )
+    }
+    assert rows["specificity"].n == 20
+    assert rows["specificity"].delta < 0, "D-095 claims three rounds score lower, not higher"
+    assert rows["specificity"].se_units < -2, "D-095 claims this one clears 2 SE"
+    # The cost side of the trade, and the reason the null result matters.
+    assert rows["papers_retrieved"].delta > 40
+    assert rows["papers_cited"].se_units is not None
+    assert abs(rows["papers_cited"].se_units) < 2, "citations are unchanged; that is the point"
+
+
+def test_deeper_rounds_search_for_literature_that_does_not_exist() -> None:
+    """The one clear *positive* effect of depth is wasted searches (D-095).
+
+    `empty_subtopics` counts subtopics arXiv had nothing for. D-021 records those as a
+    success, so they are invisible everywhere else -- yet they are the mechanism behind the
+    null result on intersection questions: the planner decomposes correctly and then queries
+    literature that was never written.
+    """
+    rows = {
+        r.metric: r
+        for r in compare.compare("narrow-abstract-top20-d0", "narrow-abstract-top20-d2")
+    }
+    assert rows["empty_subtopics"].mean_a == 0.0, "one round never came up empty"
+    assert rows["empty_subtopics"].se_units > 2, "D-095 claims this is the one clear effect"
 
 
 def test_every_arm_pairs_against_every_other_without_error() -> None:

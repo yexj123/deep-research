@@ -1,6 +1,6 @@
 {
   "judge": "gpt-4o-mini",
-  "scored_at": "2026-09-21T18:06:10.328610+00:00",
+  "scored_at": "2026-09-21T18:39:10.721219+00:00",
   "runs": {
     "broad-abstract-all-d2": {
       "attention": {
@@ -368,6 +368,190 @@
         "numeric_density": 0.0,
         "citation_density": 2.1505,
         "specificity": 0.8165
+      }
+    },
+    "narrow-abstract-top20-d0": {
+      "diffusion-text": {
+        "ungrounded_citations": 0,
+        "papers_in_context": 20,
+        "faithfulness": 0.7778,
+        "relevancy": 0.8636,
+        "numeric_density": 0.2146,
+        "citation_density": 1.9313,
+        "specificity": 0.7696
+      },
+      "distill-tokenizer": {
+        "ungrounded_citations": 0,
+        "papers_in_context": 20,
+        "faithfulness": 1.0,
+        "relevancy": 1.0,
+        "numeric_density": 1.3953,
+        "citation_density": 1.3953,
+        "specificity": 0.8007
+      },
+      "fed-privacy": {
+        "ungrounded_citations": 0,
+        "papers_in_context": 20,
+        "faithfulness": 1.0,
+        "relevancy": 1.0,
+        "numeric_density": 0.6977,
+        "citation_density": 2.3256,
+        "specificity": 0.7755
+      },
+      "gnn-transformer": {
+        "ungrounded_citations": 0,
+        "papers_in_context": 20,
+        "faithfulness": 1.0,
+        "relevancy": 1.0,
+        "numeric_density": 1.0,
+        "citation_density": 1.75,
+        "specificity": 0.791
+      },
+      "moe-latency": {
+        "ungrounded_citations": 0,
+        "papers_in_context": 16,
+        "faithfulness": 1.0,
+        "relevancy": 1.0,
+        "numeric_density": 0.0,
+        "citation_density": 1.3304,
+        "specificity": 0.8013
+      },
+      "peft-quant": {
+        "ungrounded_citations": 0,
+        "papers_in_context": 20,
+        "faithfulness": 1.0,
+        "relevancy": 1.0,
+        "numeric_density": 0.7282,
+        "citation_density": 1.9417,
+        "specificity": 0.8107
+      },
+      "rag-conflict": {
+        "ungrounded_citations": 0,
+        "papers_in_context": 20,
+        "faithfulness": 1.0,
+        "relevancy": 1.0,
+        "numeric_density": 0.0,
+        "citation_density": 1.5748,
+        "specificity": 0.8202
+      },
+      "rag-longctx": {
+        "ungrounded_citations": 0,
+        "papers_in_context": 20,
+        "faithfulness": 0.8667,
+        "relevancy": 1.0,
+        "numeric_density": 0.0,
+        "citation_density": 1.4528,
+        "specificity": 0.7818
+      },
+      "sparse-retrieval": {
+        "ungrounded_citations": 0,
+        "papers_in_context": 20,
+        "faithfulness": 1.0,
+        "relevancy": 0.8421,
+        "numeric_density": 1.087,
+        "citation_density": 1.087,
+        "specificity": 0.8047
+      },
+      "spec-quant": {
+        "ungrounded_citations": 0,
+        "papers_in_context": 20,
+        "faithfulness": 1.0,
+        "relevancy": 1.0,
+        "numeric_density": 0.0,
+        "citation_density": 1.1547,
+        "specificity": 0.7835
+      }
+    },
+    "narrow-abstract-top20-d2": {
+      "diffusion-text": {
+        "ungrounded_citations": 0,
+        "papers_in_context": 20,
+        "faithfulness": 0.8889,
+        "relevancy": 0.95,
+        "numeric_density": 0.0,
+        "citation_density": 1.7812,
+        "specificity": 0.7645
+      },
+      "distill-tokenizer": {
+        "ungrounded_citations": 0,
+        "papers_in_context": 20,
+        "faithfulness": 0.9524,
+        "relevancy": 1.0,
+        "numeric_density": 0.0,
+        "citation_density": 1.1765,
+        "specificity": 0.8107
+      },
+      "fed-privacy": {
+        "ungrounded_citations": 0,
+        "papers_in_context": 20,
+        "faithfulness": 1.0,
+        "relevancy": 1.0,
+        "numeric_density": 0.0,
+        "citation_density": 2.139,
+        "specificity": 0.7942
+      },
+      "gnn-transformer": {
+        "ungrounded_citations": 0,
+        "papers_in_context": 20,
+        "faithfulness": 1.0,
+        "relevancy": 1.0,
+        "numeric_density": 0.0,
+        "citation_density": 2.0057,
+        "specificity": 0.7812
+      },
+      "moe-latency": {
+        "ungrounded_citations": 0,
+        "papers_in_context": 20,
+        "faithfulness": 1.0,
+        "relevancy": 1.0,
+        "numeric_density": 0.7335,
+        "citation_density": 1.467,
+        "specificity": 0.8054
+      },
+      "peft-quant": {
+        "ungrounded_citations": 0,
+        "papers_in_context": 20,
+        "faithfulness": 1.0,
+        "relevancy": 1.0,
+        "numeric_density": 0.0,
+        "citation_density": 0.7481,
+        "specificity": 0.8165
+      },
+      "rag-conflict": {
+        "ungrounded_citations": 0,
+        "papers_in_context": 20,
+        "faithfulness": 0.9412,
+        "relevancy": 1.0,
+        "numeric_density": 0.0,
+        "citation_density": 1.5113,
+        "specificity": 0.7731
+      },
+      "rag-longctx": {
+        "ungrounded_citations": 0,
+        "papers_in_context": 20,
+        "faithfulness": 1.0,
+        "relevancy": 1.0,
+        "numeric_density": 0.9029,
+        "citation_density": 2.2573,
+        "specificity": 0.6728
+      },
+      "sparse-retrieval": {
+        "ungrounded_citations": 0,
+        "papers_in_context": 20,
+        "faithfulness": 1.0,
+        "relevancy": 0.8571,
+        "numeric_density": 0.0,
+        "citation_density": 1.7045,
+        "specificity": 0.7777
+      },
+      "spec-quant": {
+        "ungrounded_citations": 0,
+        "papers_in_context": 20,
+        "faithfulness": 0.9444,
+        "relevancy": 0.9474,
+        "numeric_density": 0.0,
+        "citation_density": 1.1737,
+        "specificity": 0.5777
       }
     }
   }

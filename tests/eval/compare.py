@@ -43,6 +43,11 @@ FROM_RECORDING: dict[str, Callable[[Recording], float]] = {
     "searches": lambda r: float(
         len(r.coverage.get("explored", [])) + len(r.coverage.get("empty", []))
     ),
+    # Subtopics the planner proposed that arXiv had nothing for. A zero-result search is a
+    # *success* by D-021 and so is invisible in every other metric, but it is the sharpest
+    # available evidence that a round asked for literature that does not exist -- which is
+    # what deep decomposition of an intersection question turns out to do (O-14).
+    "empty_subtopics": lambda r: float(len(r.coverage.get("empty", []))),
     "ungrounded_citations": lambda r: float(len(r.citation_violations)),
 }
 
@@ -98,15 +103,39 @@ def shared_questions(arm_a: str, arm_b: str) -> list[str]:
 
 def compare(arm_a: str, arm_b: str) -> list[Row]:
     """Paired differences (b - a) for every metric both arms carry."""
-    ids = shared_questions(arm_a, arm_b)
-    if not ids:
-        raise ValueError(f"{arm_a} and {arm_b} share no questions; there is nothing to pair")
+    return pooled([(arm_a, arm_b)])
+
+
+def pooled(pairs: list[tuple[str, str]]) -> list[Row]:
+    """The same paired analysis over several arm pairs at once.
+
+    Pooling `(broad-d0, broad-d2)` with `(narrow-d0, narrow-d2)` gives 20 paired questions
+    instead of 10, which is what lifted specificity from "inside the noise" in each set alone
+    to past 2 SE across both (D-095). The pairing stays *within* a pair, so two question sets
+    of different difficulty can be pooled without the difficulty gap contaminating the
+    differences -- pooling the raw means could not do that.
+
+    Caveat worth carrying wherever these numbers go: this reports ~13 metrics, so at n=20 one
+    crossing 2 SE by chance is unremarkable. Direction repeating independently in both sets is
+    the stronger evidence, which is why `compare` on each set is kept rather than replaced.
+    """
+    for arm_a, arm_b in pairs:
+        if not shared_questions(arm_a, arm_b):
+            raise ValueError(f"{arm_a} and {arm_b} share no questions; there is nothing to pair")
 
     rows: list[Row] = []
     for metric in list(FROM_RECORDING) + list(FROM_SCORES):
-        series_a = _series(arm_a, metric, ids)
-        series_b = _series(arm_b, metric, ids)
-        if series_a is None or series_b is None:
+        series_a: list[float] = []
+        series_b: list[float] = []
+        for arm_a, arm_b in pairs:
+            ids = shared_questions(arm_a, arm_b)
+            part_a, part_b = _series(arm_a, metric, ids), _series(arm_b, metric, ids)
+            if part_a is None or part_b is None:
+                series_a = []
+                break
+            series_a += part_a
+            series_b += part_b
+        if not series_a:
             continue
         diffs = [y - x for x, y in zip(series_a, series_b)]
         mean = st.mean(diffs)
@@ -116,18 +145,26 @@ def compare(arm_a: str, arm_b: str) -> list[Row]:
         spread = st.stdev(diffs) if len(diffs) > 1 and len(set(diffs)) > 1 else 0.0
         se = spread / len(diffs) ** 0.5 if spread else 0.0
         rows.append(
-            Row(metric, st.mean(series_a), st.mean(series_b), mean, mean / se if se else None, len(ids))
+            Row(
+                metric,
+                st.mean(series_a),
+                st.mean(series_b),
+                mean,
+                mean / se if se else None,
+                len(diffs),
+            )
         )
     return rows
 
 
-def render(arm_a: str, arm_b: str) -> str:
-    rows = compare(arm_a, arm_b)
-    ids = shared_questions(arm_a, arm_b)
+def render(pairs: list[tuple[str, str]]) -> str:
+    rows = pooled(pairs)
+    n = sum(len(shared_questions(a, b)) for a, b in pairs)
+    what = "\n".join(f"{a}  vs  {b}" for a, b in pairs)
+    label_a, label_b = pairs[0][0].split("-")[-1], pairs[0][1].split("-")[-1]
     head = (
-        f"{len(ids)} paired questions: {', '.join(ids)}\n\n"
-        f"{'metric':<22}{arm_a.split('-')[-1]:>9}{arm_b.split('-')[-1]:>9}{'delta':>10}{'SE':>6}\n"
-        + "-" * 56
+        f"{what}\n{n} paired questions{' (pooled)' if len(pairs) > 1 else ''}\n\n"
+        f"{'metric':<22}{label_a:>9}{label_b:>9}{'delta':>10}{'SE':>6}\n" + "-" * 56
     )
     tail = (
         "\nSE = mean paired difference / its standard error. Under 2 means indistinguishable\n"
@@ -137,12 +174,16 @@ def render(arm_a: str, arm_b: str) -> str:
 
 
 def main() -> int:
-    if len(sys.argv) != 3:
+    args = sys.argv[1:]
+    # An even number of arms, read as consecutive (baseline, variant) pairs. Four arms pool
+    # two experiments into one table; the pairing still happens inside each pair.
+    if len(args) < 2 or len(args) % 2:
         available = sorted(d.name for d in RECORDINGS_DIR.iterdir() if d.is_dir())
-        print(f"usage: python -m tests.eval.compare <arm-a> <arm-b>\n\narms:")
+        print("usage: python -m tests.eval.compare <arm-a> <arm-b> [<arm-c> <arm-d> ...]")
+        print("\nFour arms pool two paired experiments into one table.\n\narms:")
         print("\n".join(f"  {a}" for a in available))
         return 2
-    print(render(sys.argv[1], sys.argv[2]))
+    print(render([(args[i], args[i + 1]) for i in range(0, len(args), 2)]))
     return 0
 
 

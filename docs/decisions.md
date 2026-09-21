@@ -1475,6 +1475,95 @@ twenty affected recordings had the derived field recomputed with the production 
 itself, per arm; no agent output was altered, and nothing needed re-running, because the field
 is a function of `rounds` and `max_depth` alone.
 
+### D-095 — Depth fails on the questions built to need it, and the failure has a mechanism
+
+**O-14's first question is answered: no.** D-094's null result was not an artifact of asking
+broad survey questions. Ten *intersection* questions — each spanning two or three of the same
+areas the broad set covers separately, so a single arXiv query cannot cover them — were
+recorded at one round and three (`narrow-abstract-top20-d0`, `-d2`) and scored with the same
+pinned judge.
+
+| metric | d0 (1 round) | d2 (3 rounds) | delta | SE |
+|---|---|---|---|---|
+| papers retrieved | 27.5 | 63.3 | +35.8 | +4.9 |
+| searches | 3.0 | 10.1 | +7.1 | +18.8 |
+| **empty subtopics** | **0.0** | **1.1** | **+1.1** | **+2.9** |
+| papers cited | 6.7 | 6.3 | −0.4 | −0.5 |
+| specificity | 0.79 | 0.76 | −0.04 | −1.6 |
+| numeric_density | 0.51 | 0.16 | −0.35 | −1.4 |
+| faithfulness | 0.96 | 0.97 | +0.01 | +0.4 |
+
+**Pooled with D-094's broad arms — 20 paired questions, the strongest statement available:**
+
+| metric | d0 | d2 | delta | SE |
+|---|---|---|---|---|
+| papers retrieved | 28.05 | 72.30 | +44.25 | +10.7 |
+| papers cited | 7.35 | 7.40 | +0.05 | **+0.1** |
+| **specificity** | **0.80** | **0.77** | **−0.03** | **−2.2** |
+| **empty subtopics** | **0.00** | **0.60** | **+0.60** | **+2.7** |
+| numeric_density | 0.66 | 0.35 | −0.31 | −1.4 |
+
+Reproduce with:
+
+```sh
+uv run python -m tests.eval.compare \
+    broad-abstract-top20-d0 broad-abstract-top20-d2 \
+    narrow-abstract-top20-d0 narrow-abstract-top20-d2
+```
+
+**Two metrics clear 2 SE, and both say depth is worse.** Citations are identical to one
+decimal place. Specificity — the one metric with measured headroom (D-093: 0.95 concrete,
+0.22 vague) — is *lower* after three rounds, consistently in both question sets independently
+(−1.7 broad, −1.6 narrow) before pooling made it −2.2.
+
+**Honest reading of the statistics, because this is the claim a reader will attack.** The
+table reports 13 metrics, so at n=20 a single crossing of 2 SE is unremarkable on its own.
+What makes specificity more than that is the *replication*: the same direction, at similar
+magnitude, in two independently recorded question sets, with `numeric_density` pointing the
+same way (−0.7 and −1.4). The defensible claim is **"three rounds are no better than one, and
+plausibly slightly worse."** Not "recursion harms quality" — that needs more than 20 questions.
+
+---
+
+**The mechanism, which is the genuinely new finding.** `empty_subtopics` counts subtopics that
+returned zero papers. D-021 records those as a *success*, so they are invisible in every other
+metric — and they are where the deep rounds go. One round never came up empty, in either set.
+Three rounds came up empty **10.9% of the time on narrow questions**, against 1.1% on broad.
+
+The `spec-quant` run shows it exactly. Round 1 decomposes the intersection question correctly:
+
+```
+speculative decoding in language models
+post-training quantization methods
+interaction effects in neural network optimization
+```
+
+Rounds 2 and 3 then drill further into the intersection — and two of those searches return
+nothing at all:
+
+```
+interactions between decoding and quantization in neural networks   -> 0 papers
+performance trade-offs in dual application of ... and quantization  -> 0 papers
+```
+
+**The planner is not malfunctioning. It is decomposing correctly into literature that has not
+been written.** The papers that end up cited come from the broad round-1 searches; the deep
+rounds ask increasingly specific questions of an increasingly empty shelf. This is why depth
+fails *hardest* on exactly the questions designed to need it — the narrower the intersection,
+the less exists at it.
+
+That reframes the whole feature. Recursive decomposition was justified on the assumption that
+a hard question hides more literature deeper down. Measured, the opposite holds on this
+corpus: **depth finds less per search the deeper it goes, and the synthesis prompt is capped at
+20 papers anyway (D-094), so what it does find mostly gets discarded before the model sees it.**
+
+**What this does NOT settle:** whether a much larger `SYNTHESIS_TOP_N` would let depth pay off
+(D-092 measured pruning as free, but never at depth 0 vs 2 jointly), and whether a corpus with
+denser coverage than arXiv abstracts would behave differently — which is O-13's question, now
+noticeably more interesting than depth.
+
+**Cost of the finding:** two recording sweeps (~9.5 min) and one scoring sweep (~11 min).
+
 ## Open (proposed, not decided)
 
 **Settled 2026-09-20:** O-1 → D-064, O-2 → D-065, O-3 → D-066.
@@ -1533,13 +1622,14 @@ stay valid.
   D-094, which measured 1, 2 and 3 rounds and found no quality difference the harness can
   detect, at 2.8× the retrieval. Two questions, in order:
 
-  1. **Does depth help on questions built to need it?** The frozen ten are all broad survey
+  1. ~~**Does depth help on questions built to need it?**~~ **Answered 2026-09-21 → D-095:
+     no, and it fails hardest exactly there.** Ten intersection questions recorded at d0 and
+     d2: citations unchanged (+0.1 SE pooled), specificity *lower* (−2.2 SE pooled), and
+     10.9% of deep searches returning zero papers because the planner decomposes correctly
+     into literature that does not exist. Original note kept: the frozen ten are all broad survey
      prompts — the case least likely to need decomposition, so D-094 may be measuring the
-     easy case rather than the feature. The cheap next experiment is a second question set of
-     narrow or multi-hop questions ("how does speculative decoding interact with quantization
-     on long-context models"), recorded at d0 and d2. The question set is append-only
-     (D-088), so this is a *new* set, not an edit to the existing one. **If depth shows no
-     gain there either, recursion is decoration and the honest thesis claim says so.**
+     easy case rather than the feature. **If depth shows no gain there either, recursion is
+     decoration and the honest thesis claim says so.**
   2. **If it does help, the exit has to be value-based, not novelty-based.** Every rule
      considered so far asks "did this round find anything *new*", which D-094 shows is always
      yes. The question that actually matters is "did this round change the *review*" — e.g.
@@ -1555,9 +1645,37 @@ stay valid.
      because a plausible written estimate was wrong four times over (D-089); this one gets the
      same treatment before it earns a decision number.
 
-  **Not yet decided, and deliberately not applied:** lowering the default is a `src/` change
-  resting on n=10 broad questions, and D-079's warning about drawing rates from thin data
-  applies to me as much as to the model.
+  **Recommendation after D-095, for your decision — this is `src/`, so it stays here until you
+  confirm it.** The evidence base is now 20 paired questions across two independently recorded
+  sets, not the n=10 that made me withhold a recommendation before.
+
+  **a. `MAX_DEPTH = 1`** (from 2 — i.e. two rounds, not three). The pure evidence supports
+  **0**: one round matches three on every quality metric and beats it on specificity. The
+  reason to keep one refinement round anyway is that *every* question measured so far is a
+  literature-review prompt answered from abstracts, and d1 was never recorded on the narrow
+  set — so 0 would be extrapolating past the data in the direction that happens to be
+  convenient. `MAX_DEPTH = 1` halves the cost of a run against today's default, keeps the
+  architecture's recursion live and demonstrable, and is inside what was measured. If the
+  narrow d1 arm later matches d0, dropping to 0 becomes defensible.
+
+  **b. Replace the novelty exit with a yield exit** — stop a round when its searches come back
+  empty. D-095 makes this the *only* rule with measured support: `empty_subtopics` is the one
+  effect of depth that clears 2 SE, it is free and deterministic, and it fires precisely when
+  the planner has started querying literature that does not exist. Concretely, in `gap_check`:
+  stop if a round's subtopics returned zero papers for at least half of them. Note this needs
+  `empty_subtopics` to be readable *per round*, which state does not currently expose — it is
+  an accumulating list, so the round's slice has to be derived the way `seen_before_round`
+  already does it for `seen_paper_ids` (D-075).
+
+  **c. Rejected: the value-based (top-N contribution) exit** proposed above. It is more
+  complex than (b), its firing rate is still unmeasured, and D-095 gives (b) a mechanism it
+  does not have. Keep it in mind only if `SYNTHESIS_TOP_N` is ever raised enough that depth
+  starts paying off.
+
+  **What would overturn (a):** a question type genuinely unlike these twenty — a question
+  whose answer depends on tracing citations across papers rather than surveying a topic. Worth
+  noting as the honest boundary of the claim rather than pretending 20 questions settle
+  everything.
 
 - ~~**Evaluation needs a depth metric.**~~ **Settled → D-093**, and it found the number O-13
   should be judged on: reviews score ~0.80 specificity with headroom to 0.95, and contain
@@ -1951,4 +2069,4 @@ return nothing.
 | ~~O-11~~ | Evaluation harness | **Settled → D-088** | ~~before O-13~~ |
 | **O-12** | **In-band claim checker** | One node, one call; a product feature, not a thesis metric | After O-13 |
 | **O-13** | **Local-first corpus, BM25 first** | SQLite FTS5, no embedding model; sufficiency counted in distinct *papers*; dense retrieval demoted to a measured follow-on | Milestone 6 |
-| **O-14** | **`MAX_DEPTH` default + a value-based exit** | Measure a narrow-question set at d0 vs d2 first; the novelty-based exit is closed as unbuildable (D-094) | Before tuning depth |
+| **O-14** | **`MAX_DEPTH` default + a yield-based exit** | Narrow set measured (D-095): depth fails there too. Recommend `MAX_DEPTH = 1` and an exit on empty searches — **awaiting your confirmation, it is `src/`** | Now |
