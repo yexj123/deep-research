@@ -1,6 +1,6 @@
 {
   "judge": "gpt-4o-mini",
-  "scored_at": "2026-09-21T15:31:04.423763+00:00",
+  "scored_at": "2026-09-21T17:12:08.344679+00:00",
   "runs": {
     "abstract-all": {
       "attention": {
@@ -62,6 +62,68 @@
         "papers_in_context": 71,
         "faithfulness": 1.0,
         "relevancy": 1.0
+      }
+    },
+    "abstract-top20": {
+      "attention": {
+        "ungrounded_citations": 0,
+        "papers_in_context": 20,
+        "faithfulness": 1.0,
+        "relevancy": 1.0
+      },
+      "diffusion": {
+        "ungrounded_citations": 0,
+        "papers_in_context": 20,
+        "faithfulness": 1.0,
+        "relevancy": 1.0
+      },
+      "distillation": {
+        "ungrounded_citations": 0,
+        "papers_in_context": 20,
+        "faithfulness": 1.0,
+        "relevancy": 1.0
+      },
+      "federated": {
+        "ungrounded_citations": 0,
+        "papers_in_context": 20,
+        "faithfulness": 1.0,
+        "relevancy": 0.9524
+      },
+      "gnn": {
+        "ungrounded_citations": 0,
+        "papers_in_context": 20,
+        "faithfulness": 1.0,
+        "relevancy": 1.0
+      },
+      "long-context": {
+        "ungrounded_citations": 0,
+        "papers_in_context": 20,
+        "faithfulness": 0.875,
+        "relevancy": 1.0
+      },
+      "moe": {
+        "ungrounded_citations": 0,
+        "papers_in_context": 20,
+        "faithfulness": 1.0,
+        "relevancy": 1.0
+      },
+      "quantization": {
+        "ungrounded_citations": 0,
+        "papers_in_context": 20,
+        "faithfulness": 1.0,
+        "relevancy": 1.0
+      },
+      "rag": {
+        "ungrounded_citations": 0,
+        "papers_in_context": 20,
+        "faithfulness": 1.0,
+        "relevancy": 1.0
+      },
+      "speculative": {
+        "ungrounded_citations": 0,
+        "papers_in_context": 20,
+        "faithfulness": 0.95,
+        "relevancy": 0.8636
       }
     }
   }

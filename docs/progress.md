@@ -344,6 +344,31 @@ The graph compiles, the provider arrives through runtime context, tokens stream 
 
 ---
 
+## Context pruning: measured, shipped (D-091, D-092)
+
+Two arms, same ten questions, one setting different:
+
+| | abstract-all | abstract-top20 |
+|---|---|---|
+| Prompt tokens (~k) | 292 | **71 (−76%)** |
+| Papers cited | 81 | **85** |
+| Faithfulness | 0.970 | 0.983 |
+| Relevancy | 0.990 | 0.982 |
+
+**What this supports:** 76% fewer prompt tokens with no detectable quality change. **What it
+does not support:** that pruning improves quality — both deltas are under ~1.4 standard errors
+against the baseline's own spread, and D-090 showed identical runs share only 4 of 18 cited
+papers. Per-question swings go both ways (`federated` 7→12 cited, `rag` 6→3), which is what
+noise looks like.
+
+**The result that is more than a cost saving:** citations did not fall. Cutting 75% of the
+context produced at least as many. D-090 predicted this from the observed independence of
+cited count and supplied count; this confirms it by intervention rather than correlation.
+
+**And it settles something about the evaluation.** Neither metric could distinguish a 75%
+context cut — so neither will distinguish full-text retrieval either. The specificity metric
+is now a prerequisite for O-13, not a refinement.
+
 ## Baseline recorded (2026-09-21)
 
 Ten questions, `gpt-4o`, abstracts only. Raw data in `tests/eval/recordings/`, scores in

@@ -82,9 +82,12 @@ async def test_record_a_run(case: dict[str, str]) -> None:
 
     assert values.get("review"), f"{case['id']}: the run produced no review"
 
-    # The <papers> block split per paper: exactly what synthesize saw, which is what
-    # faithfulness must judge each claim against.
-    sources = values.get("sources", [])
+    # Exactly the papers that reached the prompt, which is what faithfulness must judge each
+    # claim against (D-091). NOT every retrieved paper: once ranking prunes, those differ, and
+    # judging a 20-paper review against 81 papers would score a context the model never saw --
+    # making the two arms quietly incomparable while every test still passed.
+    shown = set(values.get("synthesized_from", []))
+    sources = [s for s in values.get("sources", []) if not shown or s.arxiv_id in shown]
     context = [format_papers([source]) for source in sources]
 
     path = save(
@@ -94,6 +97,7 @@ async def test_record_a_run(case: dict[str, str]) -> None:
             review=values["review"],
             retrieval_context=context,
             citation_violations=values.get("citation_violations", []),
+            papers_retrieved=len(values.get("sources", [])),
             coverage=vars(summarize_coverage(values)),
             settings=_settings(),
             recorded_at=Recording.now(),

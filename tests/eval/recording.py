@@ -41,6 +41,9 @@ class Recording:
     # Deterministic measurements the agent already makes -- free, exact, no judge (D-046, D-086).
     citation_violations: list[str] = field(default_factory=list)
     coverage: dict[str, Any] = field(default_factory=dict)
+    # How many papers the run retrieved in total. retrieval_context holds only those that
+    # reached the prompt, so this is what makes pruning's effect visible in the artifact.
+    papers_retrieved: int = 0
     settings: dict[str, Any] = field(default_factory=dict)
     recorded_at: str = ""
 

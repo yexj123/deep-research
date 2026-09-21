@@ -1262,6 +1262,56 @@ metric is not a nice-to-have — without it the comparison **could not detect a 
 if one existed**, and the thesis would report "no measurable effect" from an instrument
 incapable of measuring it.
 
+### D-092 — Pruning measured: 76% fewer tokens, no detectable quality change
+
+**Both arms recorded and scored 2026-09-21**, same ten questions, same settings apart from
+`SYNTHESIS_TOP_N`. Raw data in `tests/eval/recordings/abstract-all/` and
+`.../abstract-top20/`; scores in `tests/eval/results.json`.
+
+| | abstract-all | abstract-top20 | change |
+|---|---|---|---|
+| Papers shown (total) | 797 | 200 | **−75%** |
+| Prompt tokens (~k) | 292 | 71 | **−76%** |
+| Papers cited (total) | 81 | 85 | +5% |
+| Ungrounded citations | 1 | 0 | — |
+| Faithfulness (mean) | 0.970 | 0.983 | +0.012 |
+| Relevancy (mean) | 0.990 | 0.982 | −0.009 |
+
+Papers *retrieved* is unchanged at ~81 per run. Only what reaches the prompt differs, so the
+recursion is doing the same work; the saving is entirely in synthesis.
+
+**The claim this supports: pruning to 20 papers costs 76% fewer prompt tokens with no
+detectable change in review quality.**
+
+**The claim it does NOT support: that pruning improves quality.** Both deltas are firmly
+inside the noise. The baseline faithfulness standard deviation is 0.041 across ten questions,
+so the standard error of the mean is about 0.013 — the observed +0.012 is under one standard
+error. Relevancy's −0.009 against sd 0.020 is about 1.4 standard errors. Neither is
+distinguishable from run-to-run variation, and D-090 already established that variation is
+large: two identical runs of the same question shared only 4 of 18 cited papers.
+
+The per-question swings say the same thing more plainly. `federated` went 7 → 12 cited,
+`moe` 7 → 12, while `rag` went 6 → 3 and `quantization` 10 → 7. Movement in both directions of
+that size is what noise looks like, not an effect.
+
+**The one result that is more than a cost saving:** citations did not fall. Cutting 75% of the
+context produced *at least as many* citations (81 → 85). Whatever the 62 discarded papers were
+contributing, it was not citations — which is precisely what D-090 predicted from the observed
+independence of cited count and supplied count, and is now confirmed by intervention rather
+than inferred from correlation.
+
+A plausible mechanism, untested and not claimed: with 20 papers the model engages with each,
+while with 82 it skims. Testing that properly would need the specificity metric below.
+
+**What this settles about the evaluation itself.** Faithfulness and relevancy could not
+distinguish these two arms — the instrument has no resolution here, exactly as D-090 warned
+when the baseline came in at 0.970/0.990. If a 75% context cut is invisible to both metrics,
+so is full-text retrieval. **The specificity metric is not optional before O-13**, or that
+milestone will report "no measurable effect" from an instrument incapable of measuring one.
+
+**Cost of the finding:** two ten-question recording sweeps (~6 minutes each) and one scoring
+sweep, for a permanent ~76% reduction in the most expensive call the system makes.
+
 ## Open (proposed, not decided)
 
 **Settled 2026-09-20:** O-1 → D-064, O-2 → D-065, O-3 → D-066.
@@ -1279,7 +1329,8 @@ stay valid.
   the old one. Note the graph currently ends at `check_citations`, so it has no notion of a
   second question against existing state.
 
-- **Rank the synthesis context (cheapest win found so far).** Measured in D-089: a real run put
+- ~~**Rank the synthesis context.**~~ **Settled → D-091, measured in D-092: −76% prompt
+  tokens, citations unchanged.** Original note kept for the reasoning: Measured in D-089: a real run put
   **82 papers** in the synthesis prompt and the review cited **10**. That is ~25k tokens per run
   bought for nothing, and it is fixable without a corpus, embeddings or PDFs — rank the run's
   own papers against the question with BM25 and pass the top N. Proposed: reuse the FTS5
