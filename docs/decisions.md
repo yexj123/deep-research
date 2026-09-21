@@ -1073,12 +1073,47 @@ and what was rejected. It's the answer to "why did you do it this way?"
   telemetry could not initialize is badly designed — and it keeps the worker callable directly,
   which is what `test_research_worker.py` relies on.
 
+### D-087 — A sidebar of past runs, loaded as server-rendered fragments
+- **Decision:** a persistent left sidebar lists every run. Clicking one issues
+  `hx-get="/runs/{id}/view"` targeting `#loaded-run`; the route returns the rendered review,
+  coverage and citation results as an HTML fragment. A run that is not finished offers to be
+  started or resumed.
+- **Why server-rendered rather than JSON + client rendering:** the review's markdown stays
+  escaped in Python (D-085) and the page needs no second rendering path. It is also htmx's
+  second real job here — before this it only refreshed the history list, which made D-080's
+  choice look thinner than it was.
+- **Why `#live-run` and `#loaded-run` are separate containers:** htmx replaces its target
+  wholesale, so a single shared container would drop the elements the streaming code holds
+  references to mid-run. Only one is visible at a time — two reviews on screen is a good way
+  to misread which one you are looking at.
+- **Opening a run must not execute it.** `GET /runs/{id}/view` only reads the checkpoint; a
+  test asserts the model is not built. Reopening a finished run to re-read it would otherwise
+  repeat every paid call (D-081's third state, the same trap in a new place).
+- **Wording distinguishes never-started from interrupted.** `POST /runs` records a run without
+  executing it, so "this run didn't finish" would report a failure that never happened. Not
+  started offers *Start it*; interrupted offers *Resume it*.
+- **No per-run status in the sidebar list:** that would need a checkpoint read per row (N+1)
+  to show something the run view states on open. Revisit if the list grows large enough for
+  status-at-a-glance to matter.
+- **Not built:** follow-up questions on an existing run. A sidebar entry here is a finished
+  piece of research, not a continuing conversation — see Open → "Multi-turn research sessions".
+
 ## Open (proposed, not decided)
 
 **Settled 2026-09-20:** O-1 → D-064, O-2 → D-065, O-3 → D-066.
 **Settled 2026-09-21:** O-4 → D-077, O-5 → D-086, O-6 → D-080, O-7 → `agent/runner.py`
 (see D-081), O-8's XSS half → D-085. The remaining numbering is unchanged so earlier references
 stay valid.
+
+- **Multi-turn research sessions.** The sidebar (D-087) lists past runs to reopen and read.
+  It does not let you ask a follow-up on one, which is what "session" means in ChatGPT or
+  Claude. Doing that properly is a milestone, not a UI change, and the open questions are
+  real: does a follow-up start a new `thread_id` or extend the existing one; do `sources` and
+  `explored_subtopics` carry over (probably yes — reusing `seen_paper_ids` is most of the
+  value); does `depth` reset (probably yes, or a third question can never search); does the
+  planner see earlier rounds' subtopics as explored, and does the new review replace or extend
+  the old one. Note the graph currently ends at `check_citations`, so it has no notion of a
+  second question against existing state.
 
 - **Measure hallucination rate against recursion depth (`notebooks/`).** D-079 records one
   observation in each direction; a rate needs N runs per depth on the same questions, counting

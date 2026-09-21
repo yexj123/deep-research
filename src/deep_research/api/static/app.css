@@ -5,21 +5,98 @@
   --accent: #2b5797;
   --warn: #8a4b00;
   --warn-bg: #fff6e5;
+  --sidebar-bg: #f7f7f8;
+  --sidebar-w: 17rem;
 }
 
 * { box-sizing: border-box; }
 
 body {
-  margin: 0 auto;
-  padding: 2rem 1.5rem 4rem;
-  max-width: 46rem;
+  margin: 0;
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: var(--sidebar-w) 1fr;
   font: 16px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
   color: var(--fg);
 }
 
+/* --- sidebar ---------------------------------------------------------------------- */
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: .75rem;
+  padding: 1.25rem 1rem;
+  border-right: 1px solid var(--line);
+  background: var(--sidebar-bg);
+  /* The history scrolls; the composer in <main> stays put. */
+  height: 100vh;
+  position: sticky;
+  top: 0;
+  overflow-y: auto;
+}
+
+.brand { font-weight: 600; font-size: 1.05rem; }
+
+.new-run {
+  padding: .55rem .8rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.new-run:hover { border-color: var(--accent); color: var(--accent); }
+
+.sidebar-heading {
+  margin: .75rem 0 0;
+  font-size: .72rem;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.history { list-style: none; margin: 0; padding: 0; }
+.history li + li { margin-top: .15rem; }
+.history .empty { padding: .4rem .5rem; }
+
+.entry {
+  display: block;
+  width: 100%;
+  padding: .45rem .55rem;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.entry:hover { background: #ececee; }
+.entry.active { background: #e3e9f5; }
+
+.entry-title {
+  display: block;
+  /* One line per entry: a long question shouldn't push the rest of the history off screen. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: .9rem;
+}
+.entry .meta { display: block; font-size: .72rem; }
+
+/* --- main ------------------------------------------------------------------------- */
+
+main {
+  padding: 2rem 2rem 4rem;
+  max-width: 46rem;
+}
+
 h1 { margin: 0 0 .25rem; font-size: 1.6rem; }
 h2 { margin: 2rem 0 .75rem; font-size: 1.1rem; color: var(--muted); font-weight: 600; }
-.subtitle { margin: 0 0 2rem; color: var(--muted); }
+.meta { color: var(--muted); font-size: .8rem; }
 
 form { display: flex; flex-direction: column; gap: .75rem; }
 label { font-size: .85rem; color: var(--muted); }
@@ -34,7 +111,7 @@ textarea { resize: vertical; }
 .row { display: flex; align-items: center; gap: .75rem; }
 .row label { margin-left: auto; }
 
-button {
+button[type="submit"] {
   font: inherit;
   padding: .6rem 1.2rem;
   border: 0;
@@ -43,16 +120,41 @@ button {
   color: #fff;
   cursor: pointer;
 }
-button:disabled { background: var(--muted); cursor: progress; }
+button[type="submit"]:disabled { background: var(--muted); cursor: progress; }
 
 #progress { margin: 0; padding-left: 1.25rem; color: var(--muted); }
 #progress li { margin: .2rem 0; }
 
 /* Streaming text arrives as plain text and must keep its line breaks until the server's
-   rendered HTML replaces it (O-8). */
+   rendered HTML replaces it (D-085). */
 #review { white-space: pre-wrap; }
 #review:has(h2), #review:has(p) { white-space: normal; }
-#review h2 { color: var(--fg); margin-top: 1.5rem; font-size: 1.05rem; }
+#review h2, .review h2 { color: var(--fg); margin-top: 1.5rem; font-size: 1.05rem; }
+
+.loaded .question { margin: 0 0 .25rem; font-size: 1.2rem; color: var(--fg); }
+.loaded .meta { margin: 0 0 1.5rem; }
+
+.status {
+  padding: .05rem .4rem;
+  border-radius: 4px;
+  background: #ececee;
+  font-size: .72rem;
+}
+.status-finished { background: #e3f0e4; color: #2d6a33; }
+.status-interrupted, .status-not_started { background: var(--warn-bg); color: var(--warn); }
+
+.resume { padding: .6rem .75rem; border-radius: 6px; background: var(--warn-bg); font-size: .9rem; }
+.resume button {
+  margin-left: .5rem;
+  padding: .3rem .7rem;
+  border: 1px solid var(--warn);
+  border-radius: 5px;
+  background: none;
+  color: var(--warn);
+  font: inherit;
+  font-size: .85rem;
+  cursor: pointer;
+}
 
 .warn {
   padding: .75rem;
@@ -61,10 +163,6 @@ button:disabled { background: var(--muted); cursor: progress; }
   color: var(--warn);
   font-size: .9rem;
 }
-
-#history { list-style: none; margin: 0; padding: 0; }
-#history li { padding: .5rem 0; border-bottom: 1px solid var(--line); font-size: .95rem; }
-#history .meta { color: var(--muted); font-size: .8rem; }
 
 /* What the run did not cover (O-5). Visually distinct from the review: it is the agent
    reporting on itself, not part of the literature review. */
@@ -78,3 +176,10 @@ button:disabled { background: var(--muted); cursor: progress; }
 }
 .coverage h2 { margin-top: 0; font-size: .95rem; color: var(--fg); }
 .coverage p { margin: .5rem 0; }
+
+/* Narrow screens: the sidebar becomes a strip above the content rather than disappearing. */
+@media (max-width: 52rem) {
+  body { grid-template-columns: 1fr; }
+  .sidebar { height: auto; position: static; border-right: 0; border-bottom: 1px solid var(--line); }
+  main { padding: 1.5rem 1.25rem 3rem; }
+}

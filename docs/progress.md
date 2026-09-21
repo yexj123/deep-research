@@ -30,7 +30,7 @@ Backed by `CLAUDE.md`, the output style, and `Edit(/tests/**)`, `Edit(/docs/**)`
 **Goal:** the agent reachable over HTTP — start a run, stream it to a browser, read it back —
 on a real SQLite checkpoint file.
 
-**Status (2026-09-21):** complete. `uv run pytest`: **200 passed, 1 deselected** (up from 148).
+**Status (2026-09-21):** complete. `uv run pytest`: **207 passed, 1 deselected** (up from 148).
 Decisions: D-080 – D-086, settling O-5, O-6, O-7 and O-8's XSS half. Backend `7112477`,
 frontend `ac20b98`.
 
@@ -54,6 +54,8 @@ frontend `ac20b98`.
 - [x] **O-5 — the run reports what it did not cover** (D-086): `agent/coverage.py`,
       `empty_subtopics` in state, live `custom` progress from the workers, and a
       "Coverage and limitations" panel
+- [x] **Sidebar of past runs** (D-087): click to reopen a run; unfinished runs offer to start
+      or resume, which D-081 makes cheap
 - [ ] **Run it end to end in a browser** — the one thing tests cannot reach: that tokens
       appear progressively and the review renders. `/demo-check` covers this.
 

@@ -1,11 +1,18 @@
-{# Run history fragment, swapped in by htmx. Jinja2 autoescapes, so a question containing
-   markup renders as text -- the same concern as the review (O-8), handled by the template
-   engine rather than by hand. #}
+{# Sidebar entries. Clicking one swaps that run into the main pane -- no JavaScript, and the
+   review it loads is rendered and escaped server-side (D-080, D-085).
+
+   Deliberately no per-run status here: that would need a checkpoint read per row (N+1) to
+   show something the run view already states on open. #}
 {% for run in runs %}
   <li>
-    <div>{{ run.question }}</div>
-    <div class="meta">{{ run.provider }} &middot; {{ run.created_at[:16].replace("T", " ") }}</div>
+    <button type="button" class="entry"
+            hx-get="/runs/{{ run.thread_id }}/view"
+            hx-target="#loaded-run"
+            hx-swap="innerHTML">
+      <span class="entry-title">{{ run.question }}</span>
+      <span class="meta">{{ run.created_at[:16].replace("T", " ") }}</span>
+    </button>
   </li>
 {% else %}
-  <li class="meta">No runs yet.</li>
+  <li class="meta empty">No runs yet.</li>
 {% endfor %}

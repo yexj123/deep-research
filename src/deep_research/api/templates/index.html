@@ -7,11 +7,16 @@
   <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
-  <header>
-    <h1>Deep Research</h1>
-    <p class="subtitle">Ask a research question. The agent searches arXiv, decomposes into
-      subtopics when it finds gaps, and writes a review that cites only what it retrieved.</p>
-  </header>
+  <aside class="sidebar">
+    <div class="brand">Deep Research</div>
+    <button type="button" id="new-run" class="new-run">+ New research</button>
+
+    <h2 class="sidebar-heading">History</h2>
+    <!-- htmx loads this on page load and again after each run finishes. Each entry swaps
+         that run into #loaded-run, server-rendered (D-080). -->
+    <ul id="history" class="history"
+        hx-get="/history" hx-trigger="load, refresh-history from:body"></ul>
+  </aside>
 
   <main>
     <form id="ask">
@@ -29,28 +34,22 @@
       </div>
     </form>
 
-    <section id="progress-panel" hidden>
+    <!-- The run happening now. Separate from #loaded-run on purpose: htmx replaces that
+         container wholesale, which would drop the elements the streaming code writes into. -->
+    <section id="live-run" hidden>
       <h2>Progress</h2>
-      <!-- One entry per finished node, from the `updates` stream. -->
       <ol id="progress"></ol>
-    </section>
 
-    <section id="review-panel" hidden>
       <h2>Review</h2>
-      <!-- While streaming this holds plain text (textContent, never innerHTML). The final
-           HTML arrives already rendered and escaped by the server (O-8). -->
+      <!-- Plain text while streaming (textContent, never innerHTML). The formatted version
+           arrives with the done event, already escaped server-side (D-085). -->
       <article id="review"></article>
       <p id="violations" class="warn" hidden></p>
-      <!-- What the run did NOT cover (O-5). Rendered and escaped server-side, and shown only
-           when something was actually lost. -->
       <aside id="coverage" class="coverage" hidden></aside>
     </section>
 
-    <section id="history-panel">
-      <h2>Earlier runs</h2>
-      <!-- htmx: the one place it genuinely earns its keep here. Refreshed after each run. -->
-      <ul id="history" hx-get="/history" hx-trigger="load, refresh-history from:body"></ul>
-    </section>
+    <!-- A past run, swapped in by htmx from the sidebar. -->
+    <section id="loaded-run"></section>
   </main>
 
   <script src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.10/dist/htmx.min.js"

@@ -1,0 +1,44 @@
+{# A past run, rendered server-side and swapped in by htmx (D-080, D-085).
+
+   review_html and coverage_html are already rendered AND escaped by api/rendering.py, so
+   they use |safe deliberately -- everything else here is autoescaped as normal. #}
+<article class="loaded">
+  <h2 class="question">{{ run.question }}</h2>
+  <p class="meta">
+    {{ run.provider }} &middot; {{ run.created_at[:16].replace("T", " ") }} &middot;
+    <span class="status status-{{ status }}">{{ status.replace("_", " ") }}</span>
+  </p>
+
+  {% if status == "not_started" %}
+    {# Never executed: POST /runs records a run without running it (D-081). Saying it
+       "didn't finish" would report a failure that never happened. #}
+    <p class="resume">
+      This run hasn't been started yet.
+      <button type="button" data-resume="{{ run.thread_id }}">Start it</button>
+    </p>
+  {% elif status == "interrupted" %}
+    {# D-081: a checkpoint resumes rather than restarts, so this costs at most the node that
+       was in flight when the run stopped -- not the whole run. #}
+    <p class="resume">
+      This run stopped before finishing.
+      <button type="button" data-resume="{{ run.thread_id }}">Resume it</button>
+    </p>
+  {% endif %}
+
+  {% if review_html %}
+    <div class="review">{{ review_html|safe }}</div>
+  {% else %}
+    <p class="meta">No review yet.</p>
+  {% endif %}
+
+  {% if citation_violations %}
+    <p class="warn">
+      {{ citation_violations|length }} citation(s) could not be verified against the
+      retrieved papers: {{ citation_violations|join(", ") }}
+    </p>
+  {% endif %}
+
+  {% if coverage_html %}
+    <aside class="coverage">{{ coverage_html|safe }}</aside>
+  {% endif %}
+</article>

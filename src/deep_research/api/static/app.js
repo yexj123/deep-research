@@ -5,9 +5,9 @@
 // token needs something to hold the buffer -- so the token stream uses EventSource directly.
 
 const form = document.getElementById("ask");
-const progressPanel = document.getElementById("progress-panel");
+const liveRun = document.getElementById("live-run");
+const loadedRun = document.getElementById("loaded-run");
 const progress = document.getElementById("progress");
-const reviewPanel = document.getElementById("review-panel");
 const review = document.getElementById("review");
 const violations = document.getElementById("violations");
 const coverage = document.getElementById("coverage");
@@ -23,14 +23,22 @@ const NODE_LABELS = {
   check_citations: "Verifying citations",
 };
 
-function reset() {
+function showLiveRun() {
   progress.replaceChildren();
   review.replaceChildren();
   violations.hidden = true;
   coverage.replaceChildren();
   coverage.hidden = true;
-  progressPanel.hidden = false;
-  reviewPanel.hidden = false;
+  // A live run and a loaded one are never both on screen: two reviews side by side is a
+  // good way to misread which one you're looking at.
+  loadedRun.replaceChildren();
+  liveRun.hidden = false;
+}
+
+function markActive(button) {
+  for (const entry of document.querySelectorAll(".entry")) {
+    entry.classList.toggle("active", entry === button);
+  }
 }
 
 function addProgress(node) {
@@ -99,7 +107,8 @@ function streamRun(threadId) {
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   submit.disabled = true;
-  reset();
+  showLiveRun();
+  markActive(null);
 
   const response = await fetch("/runs", {
     method: "POST",
@@ -116,4 +125,34 @@ form.addEventListener("submit", async (event) => {
     return;
   }
   streamRun((await response.json()).thread_id);
+});
+
+
+// --- the sidebar -------------------------------------------------------------------------
+
+// Opening a past run hides the live pane, so only one review is ever on screen. htmx has
+// already swapped the fragment in by the time this fires.
+document.body.addEventListener("htmx:afterSwap", (event) => {
+  if (event.target.id === "loaded-run") liveRun.hidden = true;
+});
+
+document.body.addEventListener("click", (event) => {
+  const entry = event.target.closest(".entry");
+  if (entry) markActive(entry);
+
+  // Resuming an unfinished run: the checkpoint continues from where it stopped rather than
+  // restarting, so this costs at most the node that was in flight (D-081).
+  const resume = event.target.closest("[data-resume]");
+  if (resume) {
+    showLiveRun();
+    submit.disabled = true;
+    streamRun(resume.dataset.resume);
+  }
+});
+
+document.getElementById("new-run").addEventListener("click", () => {
+  liveRun.hidden = true;
+  loadedRun.replaceChildren();
+  markActive(null);
+  document.getElementById("question").focus();
 });
