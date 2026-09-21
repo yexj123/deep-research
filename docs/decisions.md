@@ -1266,7 +1266,7 @@ incapable of measuring it.
 
 **Both arms recorded and scored 2026-09-21**, same ten questions, same settings apart from
 `SYNTHESIS_TOP_N`. Raw data in `tests/eval/recordings/abstract-all/` and
-`.../broad-abstract-top20-d2/`; scores in `tests/eval/results.json`. (Both were renamed by
+`.../broad-abstract-top20-d2-fixed/`; scores in `tests/eval/results.json`. (Both were renamed by
 D-094 and O-14, which added the depth and question-set dimensions to the arm name.)
 
 | | abstract-all | abstract-top20 | change |
@@ -1480,7 +1480,7 @@ is a function of `rounds` and `max_depth` alone.
 **O-14's first question is answered: no.** D-094's null result was not an artifact of asking
 broad survey questions. Ten *intersection* questions — each spanning two or three of the same
 areas the broad set covers separately, so a single arXiv query cannot cover them — were
-recorded at one round and three (`narrow-abstract-top20-d0`, `-d2`) and scored with the same
+recorded at one round and three (`narrow-abstract-top20-d0-fixed`, `-d2`) and scored with the same
 pinned judge.
 
 | metric | d0 (1 round) | d2 (3 rounds) | delta | SE |
@@ -1507,8 +1507,8 @@ Reproduce with:
 
 ```sh
 uv run python -m tests.eval.compare \
-    broad-abstract-top20-d0 broad-abstract-top20-d2 \
-    narrow-abstract-top20-d0 narrow-abstract-top20-d2
+    broad-abstract-top20-d0-fixed broad-abstract-top20-d2-fixed \
+    narrow-abstract-top20-d0-fixed narrow-abstract-top20-d2-fixed
 ```
 
 **Two metrics clear 2 SE, and both say depth is worse.** Citations are identical to one

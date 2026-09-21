@@ -66,6 +66,10 @@ class ResearchState:
     # operator.add could not do this -- reducer(current, 0) == current, so a node cannot
     # reset one.
     seen_before_round: int = 0
+    # How many subtopics had already come back empty when this round started. Same role as
+    # seen_before_round, for the same reason: empty_subtopics accumulates across rounds, so
+    # "did THIS round come back empty" is not readable from the total (D-075, D-096).
+    empty_before_round: int = 0
     # The arxiv_ids that actually reached the synthesis prompt (D-091). Once ranking prunes
     # the papers, "retrieved" and "shown to the model" stop being the same set -- and
     # grounding has to be against what the model SAW, or a hallucinated ID that happens to

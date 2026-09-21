@@ -168,7 +168,7 @@ def test_it_reproduces_the_depth_comparison_d094_reports() -> None:
     specificity flat at 0.80 / 0.79. If the recordings no longer produce those, either the
     data was re-recorded or the arithmetic changed -- and the prose quoting it is now wrong.
     """
-    rows = _rows("broad-abstract-top20-d0", "broad-abstract-top20-d2")
+    rows = _rows("broad-abstract-top20-d0-fixed", "broad-abstract-top20-d2-fixed")
 
     assert rows["papers_retrieved"].mean_a == pytest.approx(28.6, abs=0.05)
     assert rows["papers_retrieved"].mean_b == pytest.approx(81.3, abs=0.05)
@@ -184,7 +184,7 @@ def test_the_prompt_size_is_the_mechanism_d094_identifies() -> None:
     papers reach the model, never how many. If it ever stops holding, D-094's explanation is
     void even if its numbers survive.
     """
-    rows = _rows("broad-abstract-top20-d0", "broad-abstract-top20-d2")
+    rows = _rows("broad-abstract-top20-d0-fixed", "broad-abstract-top20-d2-fixed")
     assert rows["papers_in_prompt"].delta == pytest.approx(0.0)
     assert rows["papers_in_prompt"].mean_a == pytest.approx(20.0)
 
@@ -200,8 +200,8 @@ def test_it_reproduces_the_pooled_depth_result_d095_reports() -> None:
         r.metric: r
         for r in compare.pooled(
             [
-                ("broad-abstract-top20-d0", "broad-abstract-top20-d2"),
-                ("narrow-abstract-top20-d0", "narrow-abstract-top20-d2"),
+                ("broad-abstract-top20-d0-fixed", "broad-abstract-top20-d2-fixed"),
+                ("narrow-abstract-top20-d0-fixed", "narrow-abstract-top20-d2-fixed"),
             ]
         )
     }
@@ -224,7 +224,7 @@ def test_deeper_rounds_search_for_literature_that_does_not_exist() -> None:
     """
     rows = {
         r.metric: r
-        for r in compare.compare("narrow-abstract-top20-d0", "narrow-abstract-top20-d2")
+        for r in compare.compare("narrow-abstract-top20-d0-fixed", "narrow-abstract-top20-d2-fixed")
     }
     assert rows["empty_subtopics"].mean_a == 0.0, "one round never came up empty"
     assert rows["empty_subtopics"].se_units > 2, "D-095 claims this is the one clear effect"

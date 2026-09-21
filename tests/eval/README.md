@@ -18,7 +18,7 @@ configuration that did not produce it:
 
 ```
 {question_set}-{retrieval_unit}-{all|topN}-d{max_depth}
-broad-abstract-top20-d2      narrow-abstract-top20-d0
+broad-abstract-top20-d2-fixed      narrow-abstract-top20-d0-fixed
 ```
 
 Two environment variables select an arm; everything else comes from `config.py`:
@@ -38,7 +38,7 @@ committed JSON for free.
 ## Comparing two arms
 
 ```sh
-uv run python -m tests.eval.compare broad-abstract-top20-d0 broad-abstract-top20-d2
+uv run python -m tests.eval.compare broad-abstract-top20-d0-fixed broad-abstract-top20-d2-fixed
 ```
 
 Paired per question — the arms answer the same questions, so the mean of the per-question

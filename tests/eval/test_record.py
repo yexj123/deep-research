@@ -96,6 +96,9 @@ def _settings() -> dict[str, object]:
         "retrieval_unit": "abstract",  # O-13 will produce recordings with "full_text"
         "synthesis_top_n": SYNTHESIS_TOP_N,  # None = the pre-ranking baseline arm (D-091)
         "question_set": EVAL_QUESTION_SET,  # which frozen set was asked (O-14)
+        # "adaptive" once D-096's exits landed: the run may stop well before max_depth, so
+        # the ceiling alone no longer describes how many rounds happened.
+        "exit_rule": "adaptive",
     }
 
 

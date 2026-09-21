@@ -22,6 +22,14 @@ def _state(**overrides) -> ResearchState:
         "seen_before_round": 0,
         "seen_paper_ids": {"2411.18583"},
         "sources": [make_source(arxiv_id="2411.18583")],
+        # A finished round dispatched subtopics, by definition -- `route_subtopics` sends an
+        # empty plan straight to synthesize (D-069), so gap_check never sees a round that
+        # dispatched nothing. Stated explicitly since D-096 added an exit that reads it:
+        # omitting it described a state the graph cannot produce, and the omission only
+        # became visible once a rule depended on it.
+        "pending_subtopics": ["attention mechanisms"],
+        "empty_subtopics": [],
+        "empty_before_round": 0,
     }
     return ResearchState(**{**base, **overrides})
 

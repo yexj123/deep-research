@@ -1,12 +1,17 @@
-"""Graph wiring for milestone 4.
+"""Graph wiring for milestone 4, with the adaptive exits of D-096.
 
 START -> intake -> decompose -> (Send per subtopic) -> research_worker -> gap_check
               ^                                                              |
-              +------------------ depth left & new papers -------------------+
+              +--------- another round could still change the review --------+
                                                                              |
                                         synthesize <-------------------------+
                                              |
                                         check_citations -> END
+
+The cycle back to `decompose` is the exception rather than the rule: measured over twenty
+questions, 19 of 20 runs stop after a single round because that round already filled the
+synthesis context (D-096). `agent/exits.py` holds the four conditions and is the only place
+they are defined.
 """
 
 import httpx
@@ -15,8 +20,8 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Send
 
-from deep_research.agent.config import MAX_DEPTH
 from deep_research.agent.context import RunContext
+from deep_research.agent.exits import exit_reason
 from deep_research.agent.llm import ModelFactory
 from deep_research.agent.nodes.check_citations import check_citations
 from deep_research.agent.nodes.decompose import make_decompose
@@ -50,26 +55,53 @@ def route_subtopics(state: ResearchState) -> str | list[Send]:
 
 
 def route_after_gap_check(state: ResearchState) -> str:
-    """Another round only if depth is left AND the last round found something new (D-075).
+    """Another round only if one could still change the review (D-075, D-096).
 
     Reads the depth `gap_check` just incremented: a conditional edge sees the node's update
     already applied (confirmed 2026-09-21).
 
-    Both conditions must hold, and they are different in kind. `depth` is the hard ceiling
-    (D-009, D-026) — hitting it means the run was cut off. The new-papers check is the
-    semantic exit, and it is the one that should normally fire: a round that retrieved
-    nothing unseen would spend another paid planner call and another arXiv request to learn
-    exactly the same thing.
+    Four exits, and they are different in kind. Any one ending the run is enough, and they
+    never disagree, so there is no precedence to document — only an order chosen cheapest
+    first.
+
+    1. **The depth ceiling** (D-009, D-026) — the hard backstop. Hitting it means the run was
+       cut off, and it is the only rule that guarantees termination rather than relying on a
+       heuristic over model-chosen subtopics.
+    2. **No new papers at all** (D-075) — correct by construction: a round that retrieved
+       nothing unseen cannot change the review. Measured as almost never firing (D-094), but
+       it costs nothing and is the only exit that is true by definition rather than by
+       measurement.
+    3. **The synthesis prompt is already full** (D-096) — `rank_sources` truncates to
+       `SYNTHESIS_TOP_N` (D-091), so past that point another round can only reshuffle which
+       papers win, never add one the model sees. This is the exit that actually fires:
+       measured, one round alone reaches the cap in 19 of 20 questions, and rounds 2-3 bought
+       no measurable quality for 2.6x the retrieval (D-094, D-095).
+    4. **The round came back empty** (D-096) — see `exits._came_back_empty`.
+
+    The rules themselves live in `agent/exits.py`, not here, because `coverage.py` has to
+    report *which* one fired and a second copy of the logic drifted from this one twice
+    (D-094, D-096). This function only turns a reason into a node name.
 
     State accumulates across rounds, so "what did this round add" is not readable from
-    totals. `decompose` records `seen_before_round` when the round starts; the comparison
-    here is what makes the contribution measurable (D-075).
+    totals. `decompose` records `seen_before_round` and `empty_before_round` when the round
+    starts; the comparisons here are what make the round's own contribution measurable
+    (D-075, D-096).
+
+    Together these make depth *adaptive*: `MAX_DEPTH` stays a ceiling rather than a target,
+    and a run that has what it needs stops on its own. That is why D-095's recommendation to
+    lower `MAX_DEPTH` was implemented as these rules instead — lowering the constant would
+    have bought the same saving while hiding the reason, and would have capped the one
+    question in twenty that genuinely needed a second round.
     """
-    if state.depth > MAX_DEPTH:
-        return "synthesize"
-    if len(state.seen_paper_ids) == state.seen_before_round:
-        return "synthesize"
-    return "decompose"
+    reason = exit_reason(
+        depth=state.depth,
+        seen_count=len(state.seen_paper_ids),
+        seen_before_round=state.seen_before_round,
+        source_count=len(state.sources),
+        dispatched=len(state.pending_subtopics),
+        empties_this_round=len(state.empty_subtopics) - state.empty_before_round,
+    )
+    return "synthesize" if reason else "decompose"
 
 
 def build_graph(

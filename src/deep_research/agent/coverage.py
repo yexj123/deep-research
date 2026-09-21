@@ -19,7 +19,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any
 
-from deep_research.agent.config import MAX_DEPTH
+from deep_research.agent.exits import NO_SUBTOPICS, REASONS, describe, exit_reason
 from deep_research.agent.state import normalize_subtopic
 
 
@@ -46,21 +46,37 @@ class Coverage:
 
 
 def _stop_reason(values: dict[str, Any]) -> str:
-    """Why the run ended. Different reasons mean different things to a reader (D-075, D-076).
+    """Why the run ended. Different reasons mean different things to a reader (D-075, D-096).
 
     Hitting the depth ceiling means more rounds *might* have found more -- the run was cut
-    off, not finished. A round finding nothing new means the search had converged. Reporting
-    them identically would hide the difference that matters most.
+    off, not finished. A full synthesis context means further rounds could only have changed
+    *which* papers were used. Reporting them identically would hide the difference that
+    matters most to someone deciding how far to trust the review.
+
+    The decision is **not** reimplemented here: `exits.exit_reason` is the same function
+    `graph.route_after_gap_check` routes on. Two earlier versions of this function kept their
+    own copy of the rules and both drifted -- D-094 reported ceiling stops as convergence,
+    D-096 reported a full prompt as convergence -- so the reason a reader sees now comes from
+    the rule that actually fired.
     """
     depth = values.get("depth", 0)
     if depth == 0:
-        return "the planner proposed no subtopics worth researching"
-    if depth > MAX_DEPTH:
-        return (
-            f"the depth limit was reached after {depth} rounds "
-            f"(max_depth={MAX_DEPTH}); more rounds might have found more"
-        )
-    return f"round {depth} found no papers that earlier rounds hadn't already seen"
+        # gap_check never ran, so no round completed (D-069). Report-only: the router is
+        # called *after* gap_check increments depth and so never sees this.
+        return REASONS[NO_SUBTOPICS]
+    return describe(
+        exit_reason(
+            depth=values.get("depth", 0),
+            seen_count=len(values.get("seen_paper_ids", ())),
+            seen_before_round=values.get("seen_before_round", 0),
+            source_count=len(values.get("sources", ())),
+            dispatched=len(values.get("pending_subtopics", ())),
+            empties_this_round=(
+                len(values.get("empty_subtopics", ())) - values.get("empty_before_round", 0)
+            ),
+        ),
+        depth=values.get("depth", 0),
+    )
 
 
 def summarize_coverage(values: dict[str, Any]) -> Coverage:

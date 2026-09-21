@@ -22,7 +22,7 @@ fixture with the fake model.
 ```text
 START → intake → decompose → (Send per subtopic) → research_worker → gap_check
                      ↑                                                   │
-                     └──────── depth left & new papers ──────────────────┘
+                     └── another round could still change the review ─────┘
                                                                          │
                                              synthesize ←────────────────┘
                                                   │
@@ -150,15 +150,27 @@ One line: `{"depth": state.depth + 1}`. It finds no gaps and calls no model — 
 the gap finder. `gap_check` only counts the round; `route_after_gap_check` then decides:
 
 ```python
-if state.depth > MAX_DEPTH:                              return "synthesize"
-if len(state.seen_paper_ids) == state.seen_before_round: return "synthesize"
-return "decompose"
+reason = exit_reason(depth=..., seen_count=..., seen_before_round=...,
+                     source_count=..., dispatched=..., empties_this_round=...)
+return "synthesize" if reason else "decompose"
 ```
 
-Both conditions must hold to continue, and they differ in kind. `depth` is the hard ceiling
-(D-009) — hitting it means the run was cut off. The new-papers check is the **semantic exit**
-and should normally fire first: a round that retrieved nothing unseen would spend another paid
-planner call and another arXiv request to learn the same thing.
+The four conditions live in `agent/exits.py`, which is also what the coverage panel reads —
+they were defined twice and drifted twice, each time reporting a stop reason the run did not
+have (D-094, D-096). In order:
+
+1. **The depth ceiling** (D-009) — the hard backstop; hitting it means the run was cut off.
+2. **No new papers at all** (D-075) — correct by construction, and measured as almost never
+   firing.
+3. **The synthesis prompt is already full** (D-096) — ranking truncates to `SYNTHESIS_TOP_N`
+   (D-091), so past that point another round can only change *which* papers the model sees.
+   **This is the one that actually fires: 19 of 20 real runs stop here, after a single round.**
+4. **The round came back empty** (D-096) — most of its searches returned nothing, so the topic
+   is exhausted rather than under-explored.
+
+Together these make depth *adaptive*: `MAX_DEPTH` is a ceiling, not a target. Measured over
+twenty questions, three rounds retrieved 2.6× the papers of one for no quality difference
+(D-094, D-095), so the exits recover ~67% of the searches without touching the constant.
 
 State accumulates across rounds, so "what did *this* round add" isn't readable from totals —
 and a field with `operator.add` can't be reset by a node, since `reducer(current, 0) == current`.
@@ -250,18 +262,33 @@ question            = 'What is attention in transformer models?'
 review              = "Retrieval grounds a model's answer in papers it has just read [arXiv:2411.18583]."
 pending_subtopics   = []                       # emptied by round 2's filter — that's the exit
 explored_subtopics  = ['attention mechanisms', 'positional encoding']
+empty_subtopics     = []
 failed_subtopics    = []
-seen_paper_ids      = {'2411.18583', '2502.00306', '2510.22344'}
+seen_paper_ids      = {'2510.22344', '2502.00306', '2411.18583'}
 sources             = [3 Source objects]       # both workers found the same 3; merge_sources dedups
 skipped_entries     = 0
 depth               = 1                        # one round completed
 seen_before_round   = 3                        # the baseline round 2 was measured against
+empty_before_round  = 0                        # the same baseline for zero-result searches (D-096)
 citation_violations = []
+synthesized_from    = ['2411.18583', '2510.22344', '2502.00306']
+citations_checked   = True                     # the terminal completion marker (D-084)
 ```
 
+and the coverage summary built from it:
+
+```python
+stopped_because = "a round found no papers that earlier rounds hadn't already seen"
+```
+
+Note which exit fired: only **3** papers, far under `SYNTHESIS_TOP_N = 20`, so D-096's
+sufficiency exit stays quiet and this stays a two-round run. A real run retrieves ~30 papers
+in round 1 and stops there instead — the fixture is small on purpose, and it is worth knowing
+that it exercises a path production almost never takes.
+
 Six of these fields are written by **parallel** workers, so each needs a reducer or LangGraph
-raises `InvalidUpdateError` (D-067). `pending_subtopics`, `depth` and `seen_before_round` have
-single writers and deliberately have none.
+raises `InvalidUpdateError` (D-067). `pending_subtopics`, `depth`, `seen_before_round` and
+`empty_before_round` have single writers and deliberately have none.
 
 ---
 
@@ -384,6 +411,7 @@ and is worse than no example at all. Re-capture whenever any of these change:
 | Stream modes, or where tokens come from | the stream-order block and the note under it |
 | A new milestone's graph shape | most of §1 — rewrite rather than patch (done for milestone 4) |
 | A new reducer, or a field changing writer | the final-state block and the note under it |
+| A stopping rule added or changed (`agent/exits.py`) | step 5's condition list, the graph diagram's cycle label, and `stopped_because` in the final-state block |
 
 **How the values were captured:** the graph was run against the saved
 `tests/agent/fixtures/arxiv/search_ok.xml` fixture with `RecordingFactory` as the model

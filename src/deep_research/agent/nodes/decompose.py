@@ -88,6 +88,9 @@ def make_decompose(model_factory: ModelFactory) -> DecomposeNode:
             # the round added anything. Written here because this is where a round starts
             # (D-075).
             "seen_before_round": len(state.seen_paper_ids),
+            # The same baseline for zero-result searches, written at the same moment and for
+            # the same reason (D-096).
+            "empty_before_round": len(state.empty_subtopics),
         }
 
     return decompose

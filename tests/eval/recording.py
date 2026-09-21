@@ -94,7 +94,15 @@ def arm_name(settings: dict[str, Any]) -> str:
     unit = settings.get("retrieval_unit", "abstract")
     top_n = settings.get("synthesis_top_n")
     depth = settings.get("max_depth", 2)
-    return f"{question_set}-{unit}-{'all' if top_n is None else f'top{top_n}'}-d{depth}"
+    # How the run decided to stop. "fixed" is the depth ceiling plus D-075's new-papers test;
+    # "adaptive" adds D-096's exits. This belongs in the name because it changes how many
+    # rounds actually run -- an adaptive run under max_depth=2 usually stops after one, so
+    # without it a new recording would silently overwrite the d2 baseline it is meant to be
+    # compared against.
+    exit_rule = settings.get("exit_rule", "fixed")
+    return (
+        f"{question_set}-{unit}-{'all' if top_n is None else f'top{top_n}'}-d{depth}-{exit_rule}"
+    )
 
 
 def save(recording: Recording) -> Path:

@@ -75,6 +75,9 @@ flowchart TD
     models["sources/models.py [M2]"]
     ckpt["persistence/checkpointer.py [M2]"]
 
+    exits["agent/exits.py [D-096]"]
+    graph --> exits
+    exits --> config
     graph --> context
     graph --> llm
     graph --> intake
@@ -154,7 +157,9 @@ data that is (D-015, D-032).
 - `MAX_SUBTOPICS = 3`, used by `nodes/decompose.py` for both the prompt and the filter cap (D-070).
 
 **Milestone 4 added:**
-- `MAX_DEPTH = 2`, used by `graph.route_after_gap_check` — 0-indexed, so 3 search passes (D-026);
+- `MAX_DEPTH = 2`, used by `graph.route_after_gap_check` — 0-indexed, so 3 search passes (D-026).
+  Since D-096 this is a **ceiling, not a target**: the adaptive exits normally stop a run after
+  one round, so most runs never reach it;
 - `RECURSION_LIMIT = 15`, used by the **caller** as invoke config. The graph never reads it: leave
   it out of the config and LangGraph silently uses its default of 25 (D-077).
 
@@ -167,6 +172,11 @@ first). Both copy before appending -- a reducer must never mutate its left argum
 **Milestone 4 fields:** `depth` (rounds completed, written by `gap_check`, D-076) and
 `seen_before_round` (**no reducer**, overwritten by `decompose` — the baseline `gap_check`
 compares against to learn what a round added, D-075).
+
+**D-096 field:** `empty_before_round` (**no reducer**, overwritten by `decompose` alongside
+`seen_before_round`). `empty_subtopics` accumulates across rounds, so the total cannot answer
+"did *this* round come back empty" — without the baseline, two harmless dead ends in early
+rounds would latch the exit on permanently.
 
 **Milestone 3 fields:** `pending_subtopics` (**no reducer**, overwritten each round),
 `explored_subtopics`, `failed_subtopics` (`operator.add`, duplicates are the attempt count),
@@ -294,6 +304,22 @@ exactly like a productive one (D-021). A review missing a third of its subtopics
 notebooks want. Pure functions over state, so it tests with no graph and no HTTP.
 **Used by:** `api/routes/runs.py`, `api/rendering.py`, `tests/agent/test_coverage.py`.
 
+### `agent/exits.py` [D-096]
+**Defines:** `exit_reason(...)` — which of four conditions ends a run, or `None` to continue —
+plus `REASONS` and `describe()` for the sentence a reader sees.
+**Uses:** `config.MAX_DEPTH`, `config.SYNTHESIS_TOP_N`. Nothing else, so both callers can
+import it without either importing the other.
+**Used by:** `graph.route_after_gap_check` (routes on it) and `coverage._stop_reason`
+(reports it).
+
+**Why it is its own module.** The rule and its explanation lived in two places and drifted
+twice: D-094 (coverage compared against an unpatched `MAX_DEPTH`, so ceiling stops were
+recorded as convergence) and D-096 (coverage knew nothing of the two new exits, so a full
+prompt was reported as convergence). Neither crashed; both produced a confident wrong sentence
+in the panel readers use to judge a review. Taking primitives rather than `ResearchState` is
+what lets `graph.py` pass dataclass fields and `coverage.py` pass a checkpoint dict while
+imports still point downward (rule 1).
+
 ### `agent/runner.py` [M5]
 **Defines:** `RunState` (NOT_STARTED / INTERRUPTED / FINISHED), `get_run_state`, `stream_run`,
 `get_review`, `STREAM_MODES`.
@@ -419,6 +445,8 @@ Claude writes and maintains every file here (since 2026-09-19; see `CLAUDE.md`).
 | `api/test_rendering.py` [M5] | Model-authored markdown must not become live HTML: raw HTML escaped, dangerous link schemes not linkified, real formatting still works (D-085) | `render_review` |
 | `api/test_pages.py` [M5] | The page and its assets are served, and the history fragment escapes the question (D-080, D-085) | `create_app` |
 | `agent/test_gap_check.py` [M4] | The stopping rule as a pure function: depth accounting, and the two exits (D-075, D-076) | `gap_check`, `route_after_gap_check` |
+| `agent/test_exits.py` [D-096] | That routing and reporting can never disagree: each of the four exits fires on a state built for it, the router stops whenever any fires, and the coverage panel names the one that actually did. Exists because that invariant broke twice (D-094, D-096) | `exit_reason`, `describe`, `summarize_coverage`, `route_after_gap_check` |
+| `agent/test_adaptive_exit.py` [D-096] | The two measured exits: stop when the prompt is already full (`SYNTHESIS_TOP_N` reached) and when most of a round's searches came back empty. Includes the boundary in the direction that costs quality, the per-round baseline that stops cumulative empties latching the exit on, and the thin-question case that must still get its second round | `route_after_gap_check`, `make_source` |
 | `agent/test_recursion.py` [M4] | The whole cycle: a full-depth run fits RECURSION_LIMIT, 12 is one step too few, and each early exit (D-009, D-077) | `build_graph`, `make_arxiv_feed` |
 | `agent/test_fanout.py` [M3] | The whole graph fanning out: one worker per subtopic, reducers under parallel writes, partial failure, and which nodes stream (D-067, D-068, D-069) | `build_graph`, `fakes` |
 | `agent/test_checkpoint_roundtrip.py` [M2] | A `Source` comes back from a checkpoint as a `Source`, plus the control case (empty allowlist → `dict`) | `build_graph`, `build_serializer`, `JsonPlusSerializer`, `fakes` |
@@ -515,6 +543,7 @@ The graph code is identical in all three columns. Only the dependencies passed i
 | `ARXIV_MIN_INTERVAL_SECONDS` [M3] | `agent/config.py` | whoever builds the `ArxivRateLimiter` | D-064 |
 | `MAX_SUBTOPICS` [M3] | `agent/config.py` | `nodes/decompose.py` (prompt + filter cap) | D-070 |
 | `MAX_DEPTH` [M4] | `agent/config.py` | `graph.route_after_gap_check` **and** `coverage._stop_reason` | D-025, D-026, D-076, D-094 |
+| `SYNTHESIS_TOP_N` [D-091] | `agent/config.py` | `synthesize` (ranks the prompt) **and** `graph.route_after_gap_check` (the sufficiency exit) | D-091, D-092, D-096 |
 | `RECURSION_LIMIT` [M4] | `agent/config.py` | the **caller**, as invoke config — not the graph | D-077 |
 | `MAX_FAILURES` [M3] | `nodes/decompose.py` | the N=2 retry cap | D-020 |
 | `ARXIV_TIMEOUT_SECONDS` [M2] | `agent/config.py` | whoever creates the HTTP client (`test_integration.py` now) | D-052 |
