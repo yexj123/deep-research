@@ -1312,6 +1312,70 @@ milestone will report "no measurable effect" from an instrument incapable of mea
 **Cost of the finding:** two ten-question recording sweeps (~6 minutes each) and one scoring
 sweep, for a permanent ~76% reduction in the most expensive call the system makes.
 
+### D-093 — A specificity metric, validated before use, and what it says about O-13
+
+**The problem it solves.** Faithfulness (0.970) and relevancy (0.990) could not distinguish a
+**75% context cut** (D-092). Both sit at their ceiling, so neither would detect full-text
+retrieval either, and O-13 would report "no measurable effect" from an instrument incapable of
+measuring one.
+
+**Two halves**, following D-088's rule that the free exact measurement stays primary:
+
+- `numeric_density` and `citation_density` -- deterministic, no judge, no cost, no variance.
+  Crude, but they cannot drift.
+- A **G-Eval specificity criterion** scoring concrete, checkable claims (reported numbers,
+  named methods, experimental conditions, stated limitations) over topic-level description
+  ("several approaches have been proposed").
+
+**The instrument was tested before being trusted.** Two reviews of the same question, same
+length, same confident register, citing the same four papers, differing *only* in
+concreteness:
+
+| | score |
+|---|---|
+| Deliberately concrete | **0.950** |
+| Deliberately vague | **0.222** |
+
+A 0.73 gap, against a demanded minimum of 0.3. A metric that returns ~0.95 for everything is a
+number generator, not a measurement -- which is precisely what faithfulness became here -- so
+this check is a permanent test rather than a one-off sanity run.
+
+---
+
+**Scored across both arms** (paired differences, since the arms share questions):
+
+| metric | abstract-all | abstract-top20 | delta | SE units |
+|---|---|---|---|---|
+| specificity | 0.805 | 0.786 | −0.019 | −1.3 |
+| numeric_density | 0.654 | 0.527 | −0.127 | −0.5 |
+| citation_density | 1.858 | 2.071 | +0.213 | +1.2 |
+| faithfulness | 0.970 | 0.983 | +0.012 | +0.6 |
+| relevancy | 0.990 | 0.982 | −0.009 | −0.5 |
+
+**Every delta is under 2 standard errors**, so pruning changed nothing measurable on any of
+the five. That strengthens D-092's claim rather than weakening it: 76% fewer tokens, and now
+five metrics agree there is no quality cost rather than two.
+
+---
+
+**Two findings that matter more than the comparison.**
+
+**1. Specificity has headroom; faithfulness does not.** Real reviews score ~0.80 on an
+instrument that puts concrete at 0.95 and vague at 0.22. So there is genuine room for O-13 to
+move this number, unlike faithfulness at 0.97 or relevancy at 0.99. **This is the metric the
+full-text comparison should be judged on**, and it now has a calibrated scale behind it rather
+than an assumption.
+
+**2. The reviews contain almost no numbers.** `numeric_density` averages 0.65 claims per 100
+words, and **five of ten reviews contain none at all**. That is direct evidence for O-13's
+premise: abstracts rarely state the measurements, so a review written from abstracts cannot
+report them. If full text is worth its cost, this is where it should show first -- and it is
+the *cheapest* metric of the five, needing no judge, no key and no money.
+
+The cheapest instrument being the most discriminating for the hypothesis was not the expected
+outcome, and it is worth keeping: whatever O-13 does to specificity, `numeric_density` can be
+re-measured on every recording forever at zero cost.
+
 ## Open (proposed, not decided)
 
 **Settled 2026-09-20:** O-1 → D-064, O-2 → D-065, O-3 → D-066.
@@ -1358,7 +1422,9 @@ stay valid.
   Settle before `max_depth` is tuned — tuning a ceiling that is doing all the work is tuning
   the wrong thing.
 
-- **Evaluation needs a depth metric, not only faithfulness.** D-089 measured faithfulness 0.944
+- ~~**Evaluation needs a depth metric.**~~ **Settled → D-093**, and it found the number O-13
+  should be judged on: reviews score ~0.80 specificity with headroom to 0.95, and contain
+  almost no numbers at all (five of ten have none). Original note kept: D-089 measured faithfulness 0.944
   and relevancy 1.000 on the abstract-only baseline, which leaves almost no headroom for O-13 to
   demonstrate improvement on either. If full text is worth its cost, the gain is in what the
   review can *say* — method detail, reported numbers, stated limitations — not in whether its

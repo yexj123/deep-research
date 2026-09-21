@@ -344,6 +344,25 @@ The graph compiles, the provider arrives through runtime context, tokens stream 
 
 ---
 
+## The specificity metric, validated (D-093)
+
+Faithfulness and relevancy are at their ceiling and could not see a 75% context cut, so O-13
+needed an instrument with resolution. Built one, then **tested it before trusting it**: two
+reviews of the same question at the same length citing the same papers, differing only in
+concreteness, scored **0.950 vs 0.222**.
+
+Scored over both arms, every delta is under 2 standard errors — pruning changed nothing
+measurable on any of five metrics, which strengthens D-092 rather than weakening it.
+
+**Two findings that matter more than the comparison:**
+
+- **Specificity has headroom, faithfulness does not.** Real reviews sit at ~0.80 against a
+  0.95 concrete / 0.22 vague scale. That is the number O-13 should be judged on.
+- **The reviews contain almost no numbers.** `numeric_density` averages 0.65 per 100 words and
+  **five of ten reviews have none at all** — direct evidence for O-13's premise, since
+  abstracts rarely state measurements. And it is the *cheapest* metric of the five: no judge,
+  no key, no money, re-measurable on every recording forever.
+
 ## Context pruning: measured, shipped (D-091, D-092)
 
 Two arms, same ten questions, one setting different:

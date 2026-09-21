@@ -29,6 +29,7 @@ import pytest
 from deepeval.metrics import AnswerRelevancyMetric, FaithfulnessMetric
 from deepeval.test_case import LLMTestCase
 
+from tests.eval.metrics import citation_density, numeric_density, specificity_metric
 from tests.eval.recording import Recording, load_all
 
 # Pinned, and recorded in the assertion output. A different judge produces different numbers,
@@ -189,3 +190,40 @@ def test_the_review_answers_the_question_asked(recording: Recording) -> None:
         f"{recording.id}: relevancy {metric.score:.2f} "
         f"(judge={JUDGE_MODEL}) -- {metric.reason}"
     )
+
+
+# ---- specificity: the metric O-13 actually depends on (D-092) ------------------------
+
+
+@needs_recordings
+@pytest.mark.eval
+@pytest.mark.parametrize("recording", RECORDINGS, ids=lambda r: f"{r.arm}/{r.id}")
+def test_information_density_is_recorded(recording: Recording) -> None:
+    """Deterministic specificity proxies: numeric and citation density (D-092).
+
+    No judge, no cost, no variance -- crude, but they cannot drift and cost nothing to
+    re-run, which is why they are recorded alongside the judged score rather than replaced
+    by it (D-088).
+    """
+    _record_score(recording, "numeric_density", numeric_density(recording.review))
+    _record_score(recording, "citation_density", citation_density(recording.review))
+
+
+@needs_recordings
+@needs_key
+@pytest.mark.eval
+@pytest.mark.parametrize("recording", RECORDINGS, ids=lambda r: f"{r.arm}/{r.id}")
+def test_specificity_is_recorded(recording: Recording) -> None:
+    """Does the review make concrete, checkable claims, or only describe topics?
+
+    This is the metric O-13 rests on. Faithfulness is already ~0.97 and could not distinguish
+    a 75% context cut (D-092), so full text will not show up there either. What full text
+    should buy is reported numbers, named methods and stated limitations -- which is what this
+    measures.
+
+    Recorded, never asserted: a low score means the model wrote a vaguer review today, which
+    is a fact about the run, not a regression in the code (D-078).
+    """
+    metric = specificity_metric(JUDGE_MODEL)
+    metric.measure(_case(recording))
+    _record_score(recording, "specificity", metric.score or 0.0)
