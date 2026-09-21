@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "note": "Frozen evaluation set. Results are only comparable across changes if the input is identical, so treat this file as append-only: add questions, never reword one, because a reworded question silently invalidates every earlier recording that used it.",
+  "questions": [
+    { "id": "attention",     "question": "What is attention in transformer models?" },
+    { "id": "rag",           "question": "How does retrieval-augmented generation reduce hallucination in language models?" },
+    { "id": "diffusion",     "question": "How do diffusion models generate images?" },
+    { "id": "quantization",  "question": "What are the tradeoffs of post-training quantization for large language models?" },
+    { "id": "moe",           "question": "How do mixture-of-experts architectures scale language models efficiently?" },
+    { "id": "speculative",   "question": "How does speculative decoding speed up language model inference?" },
+    { "id": "distillation",  "question": "What methods exist for knowledge distillation of large language models?" },
+    { "id": "gnn",           "question": "How are graph neural networks used for molecular property prediction?" },
+    { "id": "federated",     "question": "What are the privacy guarantees of federated learning?" },
+    { "id": "long-context",  "question": "How do language models handle long context windows?" }
+  ]
+}

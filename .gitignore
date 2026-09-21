@@ -36,3 +36,7 @@ venv/
 .idea/
 Thumbs.db
 .DS_Store
+
+# Evaluation recordings ARE committed on purpose (O-11): they are the baseline that a later
+# full-text run gets compared against, and a baseline nobody can see is not evidence.
+# !tests/eval/recordings/

@@ -1098,6 +1098,38 @@ and what was rejected. It's the answer to "why did you do it this way?"
 - **Not built:** follow-up questions on an existing run. A sidebar entry here is a finished
   piece of research, not a continuing conversation — see Open → "Multi-turn research sessions".
 
+### D-088 — The evaluation harness records first, scores second (settles O-11)
+- **Decision:** DeepEval, driven from pytest under two new markers, both deselected by default
+  (D-036's pattern). `-m record` runs the real agent over a frozen ten-question set and saves
+  a `Recording` per question; `-m eval` loads those recordings and scores them. Judge pinned to
+  `gpt-4o-mini` and printed in every assertion message.
+- **Why the two halves are separate:** the same reason `tests/agent/fixtures/arxiv/` exists —
+  capture real output once, use it repeatedly. Recording is ~35 s and several paid calls per
+  question; scoring reads a file. Fusing them would mean re-running the agent every time a
+  metric changed, and would leave **no fixed point to compare against** when O-13 lands.
+- **What it adds that the agent does not already measure:** `citation_violations` answers "is
+  this cited ID a paper we retrieved?" exactly and for free (D-046, D-062). It does not answer
+  *claim support* — "Smith et al. showed X [arXiv:1234.5678]" where the ID is real, the paper
+  was retrieved, and the paper never says X. Faithfulness is exactly that metric.
+- **The deterministic checks stay primary.** They run first in the file and need no judge. A
+  measurement that needs no model is stronger evidence than a judged score; these complement
+  it rather than replace it.
+- **Why DeepEval over rolling our own, against this project's usual instinct:** D-042 chose
+  `httpx` over the `arxiv` package and D-083 hand-rolled SSE, both to keep every line
+  defensible. The claim check could have been ~50 lines the same way. What outweighs it is
+  **comparability** — a thesis number measured with a recognized framework compares to
+  published work, while a bespoke judge invites "how do you know it's right?". Worth recording
+  that this is a deliberate exception, not an oversight.
+- **Also rejected:** Ragas as the runner. Its synthetic question generator is the better tool
+  for *building* a question set, but DeepEval is pytest-native, which matches 207 existing
+  tests, `--strict-markers` and the `integration` marker convention with no new workflow.
+- **Rules that keep the numbers meaningful,** each mirroring a mistake this log already
+  records: `questions.json` is **append-only** (a reworded question silently invalidates every
+  earlier recording); each `Recording` stores its `settings`, including `retrieval_unit`, so
+  abstract-era and full-text-era recordings are distinguishable; thresholds are **floors, not
+  quality gates**, because a red test would mean "the model wrote a worse review today", which
+  is not a code regression.
+
 ## Open (proposed, not decided)
 
 **Settled 2026-09-20:** O-1 → D-064, O-2 → D-065, O-3 → D-066.
@@ -1355,6 +1387,6 @@ return nothing.
 | O-8 | Prompt injection | Nonce delimiter; output sanitizing at milestone 5 | Any time |
 | O-9 | Accent spellings | Measure recall first, then decide | Any time |
 | O-10 | Non-English stopwords | Accept and document | Any time |
-| **O-11** | **Evaluation harness** | DeepEval (pytest-native) + a frozen question set; deterministic metrics stay primary | **Before O-13** |
+| ~~O-11~~ | Evaluation harness | **Settled → D-088** | ~~before O-13~~ |
 | **O-12** | **In-band claim checker** | One node, one call; a product feature, not a thesis metric | After O-13 |
 | **O-13** | **Full-text corpus + retrieval** | Local embeddings in the existing SQLite file; keep abstracts as a switchable baseline | Milestone 6 |

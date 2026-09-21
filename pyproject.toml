@@ -32,14 +32,18 @@ build-backend = "uv_build"
 dev = [
     "anyio>=4.15.1",
     "asgi-lifespan>=2.1.0",
+    "deepeval>=4.2.3",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# Integration tests make paid API calls: deselected by default, run with `uv run pytest -m integration`.
-addopts = ["--strict-markers", "-m", "not integration"]
+# Anything that calls a real API is deselected by default, so `uv run pytest` is always free
+# and offline (D-036). Run each explicitly: `uv run pytest -m integration`, `-m record`, `-m eval`.
+addopts = ["--strict-markers", "-m", "not integration and not eval and not record"]
 markers = [
     "integration: calls real LLM APIs; skipped unless that provider's API key is set",
+    "record: runs the real agent over the question set and saves recordings (slow, paid)",
+    "eval: scores saved recordings with an LLM judge (paid, but cheap and fast)",
 ]
