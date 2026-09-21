@@ -65,3 +65,16 @@ button:disabled { background: var(--muted); cursor: progress; }
 #history { list-style: none; margin: 0; padding: 0; }
 #history li { padding: .5rem 0; border-bottom: 1px solid var(--line); font-size: .95rem; }
 #history .meta { color: var(--muted); font-size: .8rem; }
+
+/* What the run did not cover (O-5). Visually distinct from the review: it is the agent
+   reporting on itself, not part of the literature review. */
+.coverage {
+  margin-top: 2rem;
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fafafa;
+  font-size: .92rem;
+}
+.coverage h2 { margin-top: 0; font-size: .95rem; color: var(--fg); }
+.coverage p { margin: .5rem 0; }

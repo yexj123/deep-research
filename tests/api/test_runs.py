@@ -187,7 +187,13 @@ async def test_the_review_is_readable_after_the_stream_ends(api) -> None:
     assert run["status"] == "finished"
     assert run["review"] == DEFAULT_REPLY
     assert run["citation_violations"] == []
-    assert sorted(run["explored_subtopics"]) == ["attention mechanisms", "positional encoding"]
+    # What the run covered is reported as a structured summary rather than loose fields, so
+    # the same shape serves the UI, the API and the thesis notebooks (O-5).
+    coverage = run["coverage"]
+    assert sorted(coverage["explored"]) == ["attention mechanisms", "positional encoding"]
+    assert coverage["papers"] == 3
+    assert coverage["empty"] == []
+    assert coverage["failed"] == {}
 
 
 @pytest.mark.asyncio
@@ -213,3 +219,74 @@ async def test_the_provider_from_the_request_reaches_the_model_factory(api) -> N
     await client.get(f"/runs/{thread_id}/stream")
 
     assert set(factory.providers) == {"deepseek"}
+
+
+# ---- coverage: the run must not hide what it lost (O-5) ------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_clean_run_sends_no_coverage_section(api) -> None:
+    """A run that lost nothing isn't padded with a list of nothing (O-5)."""
+    client, _ = api
+    thread_id = await start_run(client)
+
+    body = (await client.get(f"/runs/{thread_id}/stream")).text
+    done = [data for event, data in parse_sse(body) if event == "done"][0]
+
+    import json
+
+    assert json.loads(done)["coverage_html"] == ""
+
+
+@pytest.mark.asyncio
+async def test_a_run_with_a_failed_subtopic_reports_it(api_with) -> None:
+    """A failed search must appear in the report, not just in state (O-5).
+
+    This is the last form of the project's recurring failure shape: without it, a review
+    missing a third of its subtopics reads exactly like a complete one.
+    """
+    import json
+
+    client, _ = await api_with(alpha_status=503)
+    thread_id = await start_run(client)
+
+    body = (await client.get(f"/runs/{thread_id}/stream")).text
+    done = json.loads([data for event, data in parse_sse(body) if event == "done"][0])
+
+    assert "Searches that failed" in done["coverage_html"]
+    assert "alpha topic" in done["coverage_html"]
+    assert "coverage is incomplete" in done["coverage_html"]
+
+
+@pytest.mark.asyncio
+async def test_a_run_where_nothing_was_published_says_so(api_with) -> None:
+    """Zero results is a finding, and the reader has to be told (D-021, O-5)."""
+    import json
+
+    client, _ = await api_with(empty=True)
+    thread_id = await start_run(client)
+
+    body = (await client.get(f"/runs/{thread_id}/stream")).text
+    done = json.loads([data for event, data in parse_sse(body) if event == "done"][0])
+
+    assert "No papers found for" in done["coverage_html"]
+    assert "gap in the literature" in done["coverage_html"]
+
+
+@pytest.mark.asyncio
+async def test_the_stream_carries_live_progress_from_the_workers(api) -> None:
+    """`custom` events give mid-search progress that node completion can't (O-5).
+
+    A worker searching arXiv under a 3-second rate limit is the longest silent stretch of a
+    run; without these the UI shows nothing between "Planning" and "Writing".
+    """
+    import json
+
+    client, _ = api
+    thread_id = await start_run(client)
+
+    body = (await client.get(f"/runs/{thread_id}/stream")).text
+    messages = [json.loads(data)["message"] for event, data in parse_sse(body) if event == "progress"]
+
+    assert any("Searching arXiv" in m for m in messages)
+    assert any("Found 3 paper(s)" in m for m in messages)

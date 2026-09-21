@@ -1039,11 +1039,46 @@ and what was rejected. It's the answer to "why did you do it this way?"
 - **Also escaped:** the run history fragment, via Jinja2 autoescaping -- the review is not the
   only model- or user-supplied string reaching the DOM.
 
+### D-086 — Coverage is computed from state and reported separately (settles O-5)
+- **Decision:** `agent/coverage.py` derives a `Coverage` summary from final state — what was
+  explored, what found nothing, what failed and how often, how many entries were skipped, and
+  **why the run stopped**. The API exposes it on `GET /runs/{id}` and renders it into a
+  "Coverage and limitations" panel in the `done` event. Workers additionally emit `custom`
+  events for live progress.
+- **The gap this closes.** Of the three kinds of loss, only one was even recorded:
+  `failed_subtopics` had no reader, `skipped_entries` had no reader, and a **zero-result
+  subtopic was recorded nowhere at all** — D-021 marks it explored, so it read identically to a
+  productive one. A review missing a third of its subtopics looked exactly like a complete one.
+  That is the same failure shape as D-062, D-063 and D-069: success reported for less work than
+  the reader assumes.
+- **New state field:** `empty_subtopics`, written by the worker on a successful search that
+  found nothing, with the same dedup reducer as `explored_subtopics` (D-067).
+- **"Why the run stopped" is reported, not just "it stopped".** Hitting the depth ceiling means
+  the run was *cut off* and more rounds might have found more; a round finding nothing new means
+  the search converged. Reporting those identically would hide the distinction that most affects
+  whether a reader should trust the review's completeness.
+- **Computed in the agent, rendered in the API.** "What did this run fail to cover" is a
+  research fact the thesis notebooks want, not a presentation detail. `Coverage` is a pure
+  function of state, so it is testable with no graph and no HTTP.
+- **Built from state, never asked of the model** — the same principle as D-070 and D-073: the
+  code knows exactly what was lost, and a model asked to confess its own gaps may simply not.
+- **Reported alongside the review, not inside it.** Appending to `review` would break the
+  invariant that the streamed text equals the saved review (D-037's integration assertion) and
+  would feed the coverage section to `check_citations`. Keeping them separate means `review` is
+  exactly what the model wrote, and the *document* is review + coverage.
+- **Empty for a clean run,** so a review that lost nothing is not padded with a list of nothing.
+- **`get_stream_writer()` falls back to a no-op** when there is no runnable context (confirmed:
+  it raises `RuntimeError: Called get_config outside of a runnable context`). Two reasons:
+  progress reporting must never be able to break a run — a node whose research fails because its
+  telemetry could not initialize is badly designed — and it keeps the worker callable directly,
+  which is what `test_research_worker.py` relies on.
+
 ## Open (proposed, not decided)
 
 **Settled 2026-09-20:** O-1 → D-064, O-2 → D-065, O-3 → D-066.
-**Settled 2026-09-21:** O-4 → D-077, O-6 → D-080, O-7 → `agent/runner.py` (see D-081). The
-remaining numbering is unchanged so earlier references stay valid.
+**Settled 2026-09-21:** O-4 → D-077, O-5 → D-086, O-6 → D-080, O-7 → `agent/runner.py`
+(see D-081), O-8's XSS half → D-085. The remaining numbering is unchanged so earlier references
+stay valid.
 
 - **Measure hallucination rate against recursion depth (`notebooks/`).** D-079 records one
   observation in each direction; a rate needs N runs per depth on the same questions, counting
@@ -1071,28 +1106,9 @@ Grouped by the milestone that forces the choice.
 O-1 (arXiv rate limiter) → **D-064** · O-2 (4xx vs 5xx) → **D-065** · O-3 (models per role) → **D-066**.
 Nothing open blocks the `Send` fan-out.
 
-### Needed for milestone 4 (`gap_check` + recursion)
+### Milestone 4 — all settled
 
-O-4 settled as **D-077**.
-
-#### O-5 — Making failures visible
-
-**Problem.** Failed and zero-result subtopics are currently invisible in the output. A review
-silently missing a third of its subtopics looks identical to a complete one — the same failure
-shape as D-062.
-
-| Option | Pros | Cons |
-|---|---|---|
-| **A. State fields only** (`failed_subtopics` exists already), rendered by whatever reads state | Checkpointed, deterministic, testable without a browser. Single source of truth | Nothing surfaces until the run ends |
-| **B. A `custom` stream event per failure** | Live feedback during a long run, which is the main UX complaint a demo will hit | Ephemeral — a reconnecting browser misses it. Not testable without streaming |
-| **C. Both: state is the record, `custom` is the notification** | Live *and* durable | Two code paths that can disagree about what counts as a failure |
-
-**Recommendation: A first, then C at milestone 5,** with `custom` events derived from the same
-state update so they cannot drift. Add a "Coverage and limitations" section to the review listing
-failed and zero-result subtopics — for a literature review that section is a *finding*, not an
-apology, and it is the kind of honesty an advisor rewards.
-
----
+O-4 → **D-077** (recursion_limit = 15) · O-5 → **D-086** (coverage reporting).
 
 ### Milestone 5 — all settled 2026-09-21
 
@@ -1164,7 +1180,7 @@ return nothing.
 | ~~O-2~~ | 4xx vs 5xx | **Settled → D-065** | ~~M3~~ |
 | ~~O-3~~ | Models per role | **Settled → D-066** | ~~M3~~ |
 | ~~O-4~~ | `recursion_limit` | **Settled → D-077** (15, measured minimum 13) | ~~M4~~ |
-| O-5 | Failures visible | State first, `custom` events later; add a limitations section | Milestone 4 |
+| ~~O-5~~ | Failures visible | **Settled → D-086** | ~~M4~~ |
 | ~~O-6~~ | Frontend | **Settled → D-080** (htmx + a small EventSource) | ~~M5~~ |
 | ~~O-7~~ | Public entry function | **Settled** — `agent/runner.py` (D-081, D-084) | ~~M5~~ |
 | O-8 | Prompt injection | Nonce delimiter; output sanitizing at milestone 5 | Any time |

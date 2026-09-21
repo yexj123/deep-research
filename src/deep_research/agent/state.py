@@ -50,6 +50,10 @@ class ResearchState:
     # Parallel writers from here down (D-067).
     explored_subtopics: Annotated[list[str], merge_subtopics] = field(default_factory=list)
     failed_subtopics: Annotated[list[str], operator.add] = field(default_factory=list)
+    # Explored successfully but found nothing. Zero results is a success (D-021), so without
+    # this a "nothing published on X" subtopic is indistinguishable from a productive one --
+    # which is exactly the loss O-5 exists to surface. Same dedup reducer as explored (D-067).
+    empty_subtopics: Annotated[list[str], merge_subtopics] = field(default_factory=list)
     seen_paper_ids: Annotated[set[str], operator.or_] = field(default_factory=set)
     sources: Annotated[list[Source], merge_sources] = field(default_factory=list)
     # Each worker returns its own delta, never a running total (D-067).

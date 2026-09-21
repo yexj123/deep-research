@@ -10,6 +10,7 @@ const progress = document.getElementById("progress");
 const reviewPanel = document.getElementById("review-panel");
 const review = document.getElementById("review");
 const violations = document.getElementById("violations");
+const coverage = document.getElementById("coverage");
 const submit = document.getElementById("submit");
 
 // Node name -> what the reader should be told it means.
@@ -26,6 +27,8 @@ function reset() {
   progress.replaceChildren();
   review.replaceChildren();
   violations.hidden = true;
+  coverage.replaceChildren();
+  coverage.hidden = true;
   progressPanel.hidden = false;
   reviewPanel.hidden = false;
 }
@@ -52,6 +55,13 @@ function streamRun(threadId) {
 
   source.addEventListener("node", (e) => addProgress(JSON.parse(e.data).node));
 
+  // Mid-search status a worker pushed itself (O-5). Node completion can't convey this: a
+  // worker waiting on arXiv under a 3-second rate limit is the longest silence in a run.
+  source.addEventListener("progress", (e) => {
+    const message = JSON.parse(e.data).message;
+    if (message) addProgress(message);
+  });
+
   source.addEventListener("token", (e) => {
     // Plain text while streaming: no HTML is parsed on this path at all, so a token can
     // never inject anything. The formatted version arrives with `done` (O-8).
@@ -65,6 +75,12 @@ function streamRun(threadId) {
     // parses markdown, so there is no client-side sanitizer to get wrong.
     review.innerHTML = data.review_html;
     showViolations(data.citation_violations);
+    // Empty when the run lost nothing, so a clean review isn't padded with a list of
+    // nothing. Server-rendered and escaped, like the review itself (D-085, O-5).
+    if (data.coverage_html) {
+      coverage.innerHTML = data.coverage_html;
+      coverage.hidden = false;
+    }
     source.close();
     submit.disabled = false;
     document.body.dispatchEvent(new Event("refresh-history"));

@@ -284,6 +284,16 @@ recorded verbatim. So a citation it can't read is never mistaken for a verified 
 is reported rather than accepted (D-046, D-062).
 **Registered by:** `graph.py`, as `"check_citations"`.
 
+### `agent/coverage.py` [M5]
+**Defines:** `Coverage` (explored / empty / failed / skipped_entries / papers / rounds /
+`stopped_because`, plus `is_complete`) and `summarize_coverage(values)`.
+**Why it exists (settles O-5):** three kinds of loss were invisible — failed subtopics and
+skipped entries had no reader, and a zero-result subtopic was recorded nowhere, so it read
+exactly like a productive one (D-021). A review missing a third of its subtopics looked complete.
+**In the agent, not `api/`:** "what did this run fail to cover" is a research fact the thesis
+notebooks want. Pure functions over state, so it tests with no graph and no HTTP.
+**Used by:** `api/routes/runs.py`, `api/rendering.py`, `tests/agent/test_coverage.py`.
+
 ### `agent/runner.py` [M5]
 **Defines:** `RunState` (NOT_STARTED / INTERRUPTED / FINISHED), `get_run_state`, `stream_run`,
 `get_review`, `STREAM_MODES`.
@@ -405,6 +415,9 @@ Claude writes and maintains every file here (since 2026-09-19; see `CLAUDE.md`).
 | `agent/test_research_worker.py` [M3] | The worker called directly: success contract, the 429/5xx-vs-4xx split, and that a failure never marks a subtopic explored (D-065, D-072) | `make_research_worker`, `fakes` |
 | `api/test_runs.py` [M5] | The routes over `httpx.ASGITransport`: create, list, stream, replay, 404s, and that every streamed event is JSON-serializable (D-081, D-083) | `create_app`, `fakes` |
 | `agent/test_runner.py` [M5] | start / resume / replay as a unit. Here rather than in `api/` because ASGITransport drives the response generator to completion, so an HTTP-level disconnect test would pass without exercising anything (D-084) | `stream_run`, `get_run_state` |
+| `agent/test_coverage.py` [M5] | The coverage summary: what was lost, attempt counts normalized like the retry cap, and that every run reports why it stopped (O-5, D-086) | `summarize_coverage` |
+| `api/test_rendering.py` [M5] | Model-authored markdown must not become live HTML: raw HTML escaped, dangerous link schemes not linkified, real formatting still works (D-085) | `render_review` |
+| `api/test_pages.py` [M5] | The page and its assets are served, and the history fragment escapes the question (D-080, D-085) | `create_app` |
 | `agent/test_gap_check.py` [M4] | The stopping rule as a pure function: depth accounting, and the two exits (D-075, D-076) | `gap_check`, `route_after_gap_check` |
 | `agent/test_recursion.py` [M4] | The whole cycle: a full-depth run fits RECURSION_LIMIT, 12 is one step too few, and each early exit (D-009, D-077) | `build_graph`, `make_arxiv_feed` |
 | `agent/test_fanout.py` [M3] | The whole graph fanning out: one worker per subtopic, reducers under parallel writes, partial failure, and which nodes stream (D-067, D-068, D-069) | `build_graph`, `fakes` |
@@ -456,6 +469,8 @@ inside the graph (a checkpoint is saved after every step)
 | `seen_paper_ids` [M3] | `research_worker` ‖ | the `Send` payload; `route_after_gap_check` (D-075) |
 | `depth` [M4] | `gap_check` | `route_after_gap_check` (D-076) |
 | `seen_before_round` [M4] | `decompose` (overwrite) | `route_after_gap_check` (D-075) |
+| `empty_subtopics` [M5] | `research_worker` ‖ | `summarize_coverage` (O-5, D-086) |
+| `citations_checked` [M5] | `check_citations` | `get_run_state` (D-084) |
 | `review` | `synthesize` | `check_citations` |
 | `citation_violations` [M2] | `check_citations` | nobody yet (shown in the report / UI later). Unknown IDs *and* unparseable markers (D-062) |
 

@@ -2,6 +2,7 @@
 
 import json
 import uuid
+from dataclasses import asdict
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -10,8 +11,9 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from deep_research.agent.context import ProviderType
+from deep_research.agent.coverage import summarize_coverage
 from deep_research.agent.runner import RunState, get_review, get_run_state, stream_run
-from deep_research.api.rendering import render_review
+from deep_research.api.rendering import render_coverage, render_review
 from deep_research.persistence.runs import Run, get_run, list_runs, record_run
 
 router = APIRouter(prefix="/runs", tags=["runs"])
@@ -49,7 +51,9 @@ def _event_for(chunk: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
             node, update = next(iter(chunk["data"].items()))
             return "node", {"node": node, "fields": sorted(update or {})}
         case "custom":
-            return "progress", {"message": chunk["data"]}
+            # Live status a node pushed itself (O-5): mid-search progress that no node
+            # *finishing* would convey -- "searching X", "no papers found for X".
+            return "progress", {"message": chunk["data"].get("status", "")}
         case "messages":
             message_chunk, metadata = chunk["data"]
             # Only the review streams to the reader. decompose also emits tokens from
@@ -98,9 +102,7 @@ async def read_run(request: Request, thread_id: str) -> dict[str, Any]:
         "status": (await get_run_state(graph, thread_id)).value,
         "review": values.get("review", ""),
         "citation_violations": values.get("citation_violations", []),
-        "explored_subtopics": values.get("explored_subtopics", []),
-        "failed_subtopics": values.get("failed_subtopics", []),
-        "depth": values.get("depth", 0),
+        "coverage": asdict(summarize_coverage(values)),
     }
 
 
@@ -128,6 +130,7 @@ async def stream(request: Request, thread_id: str) -> StreamingResponse:
         # previous one did (the FINISHED case yields no chunks at all).
         values = await get_review(graph, thread_id)
         review = values.get("review", "")
+        coverage = summarize_coverage(values)
         yield _sse(
             "done",
             {
@@ -136,6 +139,10 @@ async def stream(request: Request, thread_id: str) -> StreamingResponse:
                 # Rendered and escaped on the server (O-8): the page assigns this to
                 # innerHTML, so the browser must never be handed model-authored markdown.
                 "review_html": render_review(review),
+                # What the run did NOT cover, rendered separately so the model's prose stays
+                # exactly what it wrote -- and so the streamed text still equals `review`
+                # (D-037's integration assertion). Empty for a run that lost nothing (O-5).
+                "coverage_html": "" if coverage.is_complete else render_coverage(coverage),
                 "citation_violations": values.get("citation_violations", []),
             },
         )

@@ -30,8 +30,9 @@ Backed by `CLAUDE.md`, the output style, and `Edit(/tests/**)`, `Edit(/docs/**)`
 **Goal:** the agent reachable over HTTP — start a run, stream it to a browser, read it back —
 on a real SQLite checkpoint file.
 
-**Status (2026-09-21):** complete. `uv run pytest`: **183 passed, 1 deselected** (up from 148).
-Decisions: D-080 – D-085, settling O-6, O-7 and O-8's XSS half. Backend committed as `7112477`.
+**Status (2026-09-21):** complete. `uv run pytest`: **200 passed, 1 deselected** (up from 148).
+Decisions: D-080 – D-086, settling O-5, O-6, O-7 and O-8's XSS half. Backend `7112477`,
+frontend `ac20b98`.
 
 **Done:**
 - [x] Dependencies: `fastapi`, `uvicorn[standard]`, `langgraph-checkpoint-sqlite`, `jinja2` —
@@ -49,7 +50,12 @@ Decisions: D-080 – D-085, settling O-6, O-7 and O-8's XSS half. Backend commit
 - [x] `api/rendering.py` + `routes/pages.py` — server-rendered markdown, escaped (D-085)
 - [x] Verified against a real server: page, assets and the history fragment all serve, and a
       question containing `<b>` renders escaped
-- [ ] Commit the frontend, then record the hash here
+- [x] Frontend committed as `ac20b98`
+- [x] **O-5 — the run reports what it did not cover** (D-086): `agent/coverage.py`,
+      `empty_subtopics` in state, live `custom` progress from the workers, and a
+      "Coverage and limitations" panel
+- [ ] **Run it end to end in a browser** — the one thing tests cannot reach: that tokens
+      appear progressively and the review renders. `/demo-check` covers this.
 
 **Where htmx actually ended up.** D-080 expected it to handle the page, the form, history and
 the progress trail. In practice the run flow needs `fetch` + `EventSource` anyway, so the form
@@ -58,7 +64,19 @@ and the trail are plain JS and **htmx handles the history list alone** (`hx-get`
 earns its place — the alternative is hand-rolling a fetch-and-swap — but the honest framing is
 "one useful helper", not "the frontend framework".
 
-**Four things measured while building this:**
+**O-5 closed the last instance of this project's recurring failure shape.** Of the three kinds
+of loss, only one was even recorded: `failed_subtopics` had no reader, `skipped_entries` had no
+reader, and a **zero-result subtopic was recorded nowhere at all** — D-021 marks it explored, so
+it read identically to a productive one. A review missing a third of its subtopics looked
+exactly like a complete one. The run now reports what it explored, what found nothing, what
+failed and how often, how many entries were skipped, and **why it stopped** — because "the depth
+limit cut this off" and "the search converged" mean very different things to a reader.
+
+**Five things measured while building this:**
+- **`get_stream_writer()` raises outside a runnable context** (`Called get_config outside of a
+  runnable context`), which broke every direct-call worker test. Fixed with a no-op fallback,
+  on principle rather than for convenience: progress reporting must never be able to break a
+  run, and the worker's contract should stay testable without graph scaffolding.
 - **`markdown-it-py`'s default is unsafe.** `MarkdownIt()` ships with `html=True`, so
   `<script>` in a review passes straight through to the browser. Since the review is written by
   a model that just read untrusted abstracts, that is a live XSS. Fixed with `html=False`
