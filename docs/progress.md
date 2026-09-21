@@ -26,7 +26,7 @@ Backed by `CLAUDE.md`, the output style, and `Edit(/tests/**)`, `Edit(/docs/**)`
       ratio is worth keeping as evidence
 - [x] **Measured quality against depth** (D-094, `cf936f0`) — d0/d1/d2 recorded and scored; no detectable
       difference, so `MAX_DEPTH` is *not* being tuned on this data (O-14 says why)
-- [x] **O-14, step 1: a narrow-question set at d0 vs d2** (D-095, `pending`) — recorded and
+- [x] **O-14, step 1: a narrow-question set at d0 vs d2** (D-095, `e326202`) — recorded and
       scored; depth fails on intersection questions too, and fails hardest there
 - [ ] **Decide O-14's two `src/` changes** — `MAX_DEPTH = 1`, and a yield-based exit that
       stops on empty searches. Claude has measured and recommended; the implementation and the
