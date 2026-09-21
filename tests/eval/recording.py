@@ -44,6 +44,16 @@ class Recording:
     settings: dict[str, Any] = field(default_factory=dict)
     recorded_at: str = ""
 
+    @property
+    def arm(self) -> str:
+        """Which configuration produced this, used as the directory name.
+
+        Arms live side by side rather than overwriting each other: a comparison needs both
+        present at once, and keeping the baseline only in git history means it is one
+        careless re-record away from being unrecoverable in practice.
+        """
+        return arm_name(self.settings)
+
     @staticmethod
     def now() -> str:
         return datetime.now(UTC).isoformat()
@@ -54,18 +64,39 @@ def load_questions() -> list[dict[str, str]]:
     return json.loads(QUESTIONS_FILE.read_text(encoding="utf-8"))["questions"]
 
 
+def arm_name(settings: dict[str, Any]) -> str:
+    """A short, stable name for one configuration: "abstract-all", "abstract-top20", ...
+
+    Derived from `settings` rather than passed in, so a recording can never be filed under an
+    arm that does not match how it was produced. That mislabelling would be invisible and
+    would silently corrupt every comparison drawn from it.
+    """
+    unit = settings.get("retrieval_unit", "abstract")
+    top_n = settings.get("synthesis_top_n")
+    return f"{unit}-{'all' if top_n is None else f'top{top_n}'}"
+
+
 def save(recording: Recording) -> Path:
-    RECORDINGS_DIR.mkdir(parents=True, exist_ok=True)
-    path = RECORDINGS_DIR / f"{recording.id}.json"
+    directory = RECORDINGS_DIR / recording.arm
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"{recording.id}.json"
     path.write_text(json.dumps(asdict(recording), indent=2) + "\n", encoding="utf-8")
     return path
 
 
-def load_all() -> list[Recording]:
-    """Every saved recording, sorted by id so test ordering is stable."""
+def load_all(arm: str | None = None) -> list[Recording]:
+    """Recordings for one arm, or every arm. Sorted, so test ordering is stable."""
     if not RECORDINGS_DIR.exists():
         return []
+    pattern = f"{arm}/*.json" if arm else "*/*.json"
     return [
         Recording(**json.loads(path.read_text(encoding="utf-8")))
-        for path in sorted(RECORDINGS_DIR.glob("*.json"))
+        for path in sorted(RECORDINGS_DIR.glob(pattern))
     ]
+
+
+def arms() -> list[str]:
+    """Every arm that currently has recordings."""
+    if not RECORDINGS_DIR.exists():
+        return []
+    return sorted(d.name for d in RECORDINGS_DIR.iterdir() if d.is_dir())

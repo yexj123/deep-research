@@ -66,6 +66,11 @@ class ResearchState:
     # operator.add could not do this -- reducer(current, 0) == current, so a node cannot
     # reset one.
     seen_before_round: int = 0
+    # The arxiv_ids that actually reached the synthesis prompt (D-091). Once ranking prunes
+    # the papers, "retrieved" and "shown to the model" stop being the same set -- and
+    # grounding has to be against what the model SAW, or a hallucinated ID that happens to
+    # match an unshown paper would validate (D-046). Single writer, so no reducer.
+    synthesized_from: list[str] = field(default_factory=list)
     citation_violations: list[str] = field(default_factory=list)
     # Written only by check_citations, the terminal node, so it is the one reliable "this run
     # completed" signal (D-084). `next == ()` is not: a run interrupted at a step boundary

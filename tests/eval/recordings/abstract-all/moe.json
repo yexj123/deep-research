@@ -114,7 +114,8 @@
     "model": "gpt-4o",
     "max_depth": 2,
     "max_subtopics": 3,
-    "retrieval_unit": "abstract"
+    "retrieval_unit": "abstract",
+    "synthesis_top_n": null
   },
   "recorded_at": "2026-09-21T15:22:52.594049+00:00"
 }

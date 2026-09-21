@@ -43,11 +43,21 @@ class ArxivSearchResult:
     skipped: int  # entries dropped because they failed validation (D-045)
 
 
-def build_search_query(question: str) -> str:
-    """Turn the user's question into an arXiv `search_query` string (D-051).
+def search_terms(question: str) -> list[str]:
+    """The searchable terms of a question: punctuation stripped, stopwords dropped, lowercased.
 
-    "What is attention in transformer models?" -> "all:attention AND all:transformer AND all:models"
-    Raises ValueError when no terms are left, e.g. a question made only of stopwords (D-059).
+    Lifted out of `build_search_query` so the same cleaning serves every backend that takes a
+    query. Two properties make it safe rather than merely tidy, and both are load-bearing:
+
+    - **Punctuation stripping removes query-syntax characters** for arXiv (`:`, `"`, parens —
+      D-051) *and* for SQLite FTS5 (`"`, `*`, `(`, `)`, `:`, `^`). An unstripped quote makes
+      FTS5 raise `OperationalError: unterminated string`.
+    - **Lowercasing is a security property, not normalization.** FTS5's word operators are
+      case-sensitive: `attention AND transformer` is an operator expression, `attention and
+      transformer` is three ordinary terms. Preserving the planner's capitalization to look
+      tidier would silently reintroduce operator injection, with nothing failing.
+
+    Raises ValueError when nothing is left, e.g. a question made only of stopwords (D-059).
     """
     cleaned = PUNCTUATION_PATTERN.sub(" ", question)
     terms = [token.lower() for token in cleaned.split() if token.lower() not in STOPWORDS]
@@ -56,8 +66,15 @@ def build_search_query(question: str) -> str:
         raise ValueError(
             f"Search question {question!r} contains no meaningful terms after stopword removal."
         )
+    return terms
 
-    return " AND ".join(f"all:{term}" for term in terms)
+
+def build_search_query(question: str) -> str:
+    """Turn the user's question into an arXiv `search_query` string (D-051).
+
+    "What is attention in transformer models?" -> "all:attention AND all:transformer AND all:models"
+    """
+    return " AND ".join(f"all:{term}" for term in search_terms(question))
 
 
 def split_versioned_id(entry_id: str) -> tuple[str, int]:

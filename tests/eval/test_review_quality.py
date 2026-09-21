@@ -48,11 +48,13 @@ RESULTS_FILE = Path(__file__).parent / "results.json"
 # Scores accumulate here and are written once at session end. A passing test only says "above
 # the floor", which is useless as a baseline: when O-13 lands, both runs would pass and the
 # comparison would be impossible. The number is the artifact, not the green tick.
-_SCORES: dict[str, dict[str, float]] = {}
+_SCORES: dict[str, dict[str, dict[str, float]]] = {}
 
 
-def _record_score(recording_id: str, metric: str, score: float) -> None:
-    _SCORES.setdefault(recording_id, {})[metric] = round(score, 4)
+def _record_score(recording: "Recording", metric: str, score: float) -> None:
+    # Keyed by arm first: two arms scoring the same question must not overwrite each other,
+    # which is the entire point of recording them separately.
+    _SCORES.setdefault(recording.arm, {}).setdefault(recording.id, {})[metric] = round(score, 4)
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -69,8 +71,9 @@ def write_results() -> Iterator[None]:
     if RESULTS_FILE.exists():
         existing = json.loads(RESULTS_FILE.read_text(encoding="utf-8"))
     runs = existing.get("runs", {})
-    for recording_id, scores in _SCORES.items():
-        runs.setdefault(recording_id, {}).update(scores)
+    for arm, per_question in _SCORES.items():
+        for recording_id, scores in per_question.items():
+            runs.setdefault(arm, {}).setdefault(recording_id, {}).update(scores)
     RESULTS_FILE.write_text(
         json.dumps(
             {"judge": JUDGE_MODEL, "scored_at": datetime.now(UTC).isoformat(), "runs": runs},
@@ -103,7 +106,7 @@ def _case(recording: Recording) -> LLMTestCase:
 
 @needs_recordings
 @pytest.mark.eval
-@pytest.mark.parametrize("recording", RECORDINGS, ids=lambda r: r.id)
+@pytest.mark.parametrize("recording", RECORDINGS, ids=lambda r: f"{r.arm}/{r.id}")
 def test_ungrounded_citations_are_recorded_not_asserted(recording: Recording) -> None:
     """Record how many citations were ungrounded. Do NOT fail on them (D-078).
 
@@ -120,8 +123,8 @@ def test_ungrounded_citations_are_recorded_not_asserted(recording: Recording) ->
     What *would* fail: a violation that names a paper the run actually retrieved, which would
     mean the checker itself is broken.
     """
-    _record_score(recording.id, "ungrounded_citations", len(recording.citation_violations))
-    _record_score(recording.id, "papers_in_context", len(recording.retrieval_context))
+    _record_score(recording, "ungrounded_citations", len(recording.citation_violations))
+    _record_score(recording, "papers_in_context", len(recording.retrieval_context))
 
     retrieved = " ".join(recording.retrieval_context)
     for violation in recording.citation_violations:
@@ -133,7 +136,7 @@ def test_ungrounded_citations_are_recorded_not_asserted(recording: Recording) ->
 
 @needs_recordings
 @pytest.mark.eval
-@pytest.mark.parametrize("recording", RECORDINGS, ids=lambda r: r.id)
+@pytest.mark.parametrize("recording", RECORDINGS, ids=lambda r: f"{r.arm}/{r.id}")
 def test_the_run_actually_researched_something(recording: Recording) -> None:
     """A recording with no papers cannot be scored meaningfully (D-021, D-086).
 
@@ -150,7 +153,7 @@ def test_the_run_actually_researched_something(recording: Recording) -> None:
 @needs_recordings
 @needs_key
 @pytest.mark.eval
-@pytest.mark.parametrize("recording", RECORDINGS, ids=lambda r: r.id)
+@pytest.mark.parametrize("recording", RECORDINGS, ids=lambda r: f"{r.arm}/{r.id}")
 def test_claims_are_supported_by_the_retrieved_papers(recording: Recording) -> None:
     """Faithfulness: is each claim in the review supported by the abstracts it cites?
 
@@ -160,7 +163,7 @@ def test_claims_are_supported_by_the_retrieved_papers(recording: Recording) -> N
     """
     metric = FaithfulnessMetric(threshold=FAITHFULNESS_FLOOR, model=JUDGE_MODEL)
     metric.measure(_case(recording))
-    _record_score(recording.id, "faithfulness", metric.score or 0.0)
+    _record_score(recording, "faithfulness", metric.score or 0.0)
 
     assert metric.score is not None and metric.score >= FAITHFULNESS_FLOOR, (
         f"{recording.id}: faithfulness {metric.score:.2f} "
@@ -171,7 +174,7 @@ def test_claims_are_supported_by_the_retrieved_papers(recording: Recording) -> N
 @needs_recordings
 @needs_key
 @pytest.mark.eval
-@pytest.mark.parametrize("recording", RECORDINGS, ids=lambda r: r.id)
+@pytest.mark.parametrize("recording", RECORDINGS, ids=lambda r: f"{r.arm}/{r.id}")
 def test_the_review_answers_the_question_asked(recording: Recording) -> None:
     """Answer relevancy: a faithful review of the wrong topic is still a bad review.
 
@@ -180,7 +183,7 @@ def test_the_review_answers_the_question_asked(recording: Recording) -> None:
     """
     metric = AnswerRelevancyMetric(threshold=RELEVANCY_FLOOR, model=JUDGE_MODEL)
     metric.measure(_case(recording))
-    _record_score(recording.id, "relevancy", metric.score or 0.0)
+    _record_score(recording, "relevancy", metric.score or 0.0)
 
     assert metric.score is not None and metric.score >= RELEVANCY_FLOOR, (
         f"{recording.id}: relevancy {metric.score:.2f} "

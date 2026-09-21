@@ -39,3 +39,13 @@ MAX_DEPTH: int = 2
 #    GraphRecursionError means the semantic exit is broken -- fix that, not this number
 #    (D-077).
 RECURSION_LIMIT: int = 15
+
+# How many papers reach the synthesis prompt, ranked by BM25 against the question (D-091).
+# None means "all", which is the pre-ranking behaviour and the baseline arm -- kept switchable
+# so both can be recorded from one codebase rather than from git history.
+#
+# 20 comes from measurement, not intuition (D-090): across ten runs, 797 papers were supplied
+# and 81 cited, and the cited count was 6-12 REGARDLESS of supply. So above ~20 the extra
+# context buys nothing measurable, and 20 leaves headroom over the observed maximum of 12
+# because BM25 will not perfectly predict which papers the model chooses to cite.
+SYNTHESIS_TOP_N: int | None = 20

@@ -25,6 +25,7 @@ from deep_research.agent.config import (
     MAX_SUBTOPICS,
     MODEL_NAMES,
     RECURSION_LIMIT,
+    SYNTHESIS_TOP_N,
 )
 from deep_research.agent.context import RunContext
 from deep_research.agent.coverage import summarize_coverage
@@ -46,6 +47,7 @@ def _settings() -> dict[str, object]:
         "max_depth": MAX_DEPTH,
         "max_subtopics": MAX_SUBTOPICS,
         "retrieval_unit": "abstract",  # O-13 will produce recordings with "full_text"
+        "synthesis_top_n": SYNTHESIS_TOP_N,  # None = the pre-ranking baseline arm (D-091)
     }
 
 

@@ -5,7 +5,9 @@ from typing import Any
 
 from langgraph.runtime import Runtime
 
+from deep_research.agent.config import SYNTHESIS_TOP_N
 from deep_research.agent.context import RunContext
+from deep_research.agent.ranking import rank_sources
 from deep_research.agent.llm import ModelFactory
 from deep_research.agent.sources.models import Source
 from deep_research.agent.state import ResearchState
@@ -64,12 +66,23 @@ def make_synthesize(model_factory: ModelFactory) -> SynthesizeNode:
 
         model = model_factory(runtime.context.provider)
 
+        # Rank and prune before building the prompt (D-091). Measured across ten runs (D-090):
+        # ~90% of supplied papers were never cited, and the cited count did not scale with
+        # supply -- so this cuts tokens without costing coverage.
+        papers = rank_sources(state.sources, state.question, SYNTHESIS_TOP_N)
+
         messages = [
             ("system", SYSTEM_PROMPT),
-            ("human", f"Research question: {state.question}\n\n{format_papers(state.sources)}"),
+            ("human", f"Research question: {state.question}\n\n{format_papers(papers)}"),
         ]
         # No manual streaming: the "messages" stream mode picks up this call's tokens.
         reply = await model.ainvoke(messages)
-        return {"review": reply.text}
+        # What the model was actually shown. check_citations grounds against this rather than
+        # against every retrieved paper: once ranking prunes, those are different sets, and a
+        # hallucinated ID matching an unshown paper must not validate (D-046, D-091).
+        return {
+            "review": reply.text,
+            "synthesized_from": [paper.arxiv_id for paper in papers],
+        }
 
     return synthesize

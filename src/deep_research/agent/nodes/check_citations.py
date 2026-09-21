@@ -36,7 +36,13 @@ class Citation(BaseModel):
 
 def check_citations(state: ResearchState) -> dict[str, Any]:
     """Record every citation that can't be verified against the retrieved papers (D-046, D-062)."""
-    known_ids: set[str] = {source.arxiv_id for source in state.sources}
+    # Ground against what the model was SHOWN, not everything retrieved (D-091). Once
+    # ranking prunes the papers those differ, and validating against the full set would let a
+    # hallucinated ID pass whenever it happened to match a paper the model never saw --
+    # weakening the one check this project is built around (D-046).
+    # Falls back to all sources for runs recorded before synthesized_from existed, and for the
+    # zero-sources path where synthesize never builds a prompt (D-060).
+    known_ids: set[str] = set(state.synthesized_from) or {s.arxiv_id for s in state.sources}
 
     violations: list[str] = []
     seen: set[str] = set()

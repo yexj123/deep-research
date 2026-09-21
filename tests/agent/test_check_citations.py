@@ -166,3 +166,51 @@ def test_check_citations_marks_the_run_as_checked() -> None:
     """
     state = ResearchState(question="q", review="No citations here.", sources=[])
     assert check_citations(state)["citations_checked"] is True
+
+
+# --- D-091: ground against what the model was SHOWN, not everything retrieved ---
+
+
+def test_citing_a_retrieved_paper_that_was_never_shown_is_a_violation() -> None:
+    """Once ranking prunes, "retrieved" and "shown to the model" are different sets (D-091).
+
+    This is the hole pruning would otherwise open. The model sees the top 20 of 82 papers; if
+    it invents an ID from memory that happens to match one of the 62 it never saw, grounding
+    against all 82 would pass it. The model did not read that paper -- it guessed, and got
+    lucky. D-046 is "is this one of the papers we actually read", so the set must be what
+    reached the prompt.
+    """
+    state = ResearchState(
+        question="What is RAG?",
+        review="RAG grounds answers [arXiv:2502.00306].",
+        sources=[make_source(arxiv_id="2411.18583"), make_source(arxiv_id="2502.00306")],
+        synthesized_from=["2411.18583"],  # only this one reached the prompt
+    )
+    assert check_citations(state)["citation_violations"] == ["2502.00306"]
+
+
+def test_citing_a_paper_that_was_shown_is_clean() -> None:
+    """The control for the test above: a paper in the prompt validates normally (D-091)."""
+    state = ResearchState(
+        question="What is RAG?",
+        review="RAG grounds answers [arXiv:2411.18583].",
+        sources=[make_source(arxiv_id="2411.18583"), make_source(arxiv_id="2502.00306")],
+        synthesized_from=["2411.18583"],
+    )
+    assert check_citations(state)["citation_violations"] == []
+
+
+def test_grounding_falls_back_to_all_sources_when_nothing_was_synthesized() -> None:
+    """An empty synthesized_from falls back to every retrieved paper (D-091).
+
+    Two paths reach here: the zero-sources review, where synthesize never builds a prompt
+    (D-060), and runs checkpointed before this field existed. Neither should suddenly report
+    every citation as ungrounded.
+    """
+    state = ResearchState(
+        question="What is RAG?",
+        review="RAG grounds answers [arXiv:2411.18583].",
+        sources=[make_source(arxiv_id="2411.18583")],
+        synthesized_from=[],
+    )
+    assert check_citations(state)["citation_violations"] == []

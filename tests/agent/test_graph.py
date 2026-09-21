@@ -321,3 +321,24 @@ async def test_invalid_provider_raises(
             context=RunContext(provider="gemini"),  # type: ignore[arg-type]
             version="v2",
         )
+
+
+@pytest.mark.asyncio
+async def test_synthesize_records_which_papers_it_showed_the_model(
+    fake_factory: RecordingFactory, arxiv_ok: ArxivStub, limiter: NullLimiter, checkpointer: InMemorySaver
+) -> None:
+    """synthesized_from names the papers that reached the prompt (D-091).
+
+    check_citations grounds against this rather than against every retrieved paper, so if
+    synthesize ever stops reporting it, grounding silently widens to include papers the model
+    never saw -- with no test failing anywhere else.
+    """
+    graph = build_graph(fake_factory, arxiv_ok.client, limiter, checkpointer)
+    output = await graph.ainvoke(
+        {"question": "What is attention?"},
+        _config("synthesized-from"),
+        context=RunContext(provider="openai"),
+        version="v2",
+    )
+
+    assert sorted(output.value.synthesized_from) == sorted(s.arxiv_id for s in output.value.sources)
