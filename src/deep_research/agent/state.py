@@ -54,5 +54,12 @@ class ResearchState:
     sources: Annotated[list[Source], merge_sources] = field(default_factory=list)
     # Each worker returns its own delta, never a running total (D-067).
     skipped_entries: Annotated[int, operator.add] = 0
+    # Rounds completed. gap_check increments it, so a full run ends at MAX_DEPTH + 1
+    # (D-026, D-076). Single writer, so no reducer.
     depth: int = 0
+    # No reducer, overwritten by decompose each round: gap_check compares the current
+    # len(seen_paper_ids) against this to learn what *this* round added (D-075). A field with
+    # operator.add could not do this -- reducer(current, 0) == current, so a node cannot
+    # reset one.
+    seen_before_round: int = 0
     citation_violations: list[str] = field(default_factory=list)

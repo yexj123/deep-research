@@ -11,7 +11,11 @@ import pytest
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import InMemorySaver
 
-from deep_research.agent.config import ARXIV_MIN_INTERVAL_SECONDS, ARXIV_TIMEOUT_SECONDS
+from deep_research.agent.config import (
+    ARXIV_MIN_INTERVAL_SECONDS,
+    ARXIV_TIMEOUT_SECONDS,
+    RECURSION_LIMIT,
+)
 from deep_research.agent.context import RunContext
 from deep_research.agent.graph import build_graph
 from deep_research.agent.llm import get_chat_model
@@ -20,7 +24,9 @@ from deep_research.agent.sources.rate_limit import ArxivRateLimiter
 
 
 def _config(thread_id: str) -> RunnableConfig:
-    return {"configurable": {"thread_id": thread_id}}
+    # recursion_limit is invoke config, not graph config -- the caller sets it, or LangGraph
+    # silently uses its default of 25 instead of the measured value (D-077).
+    return {"configurable": {"thread_id": thread_id}, "recursion_limit": RECURSION_LIMIT}
 
 
 @pytest.mark.integration

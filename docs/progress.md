@@ -3,7 +3,7 @@
 What's done, what's next, and whose job each item is. Design reasoning
 lives in [`decisions.md`](decisions.md); this file only tracks status.
 
-**Last updated:** 2026-09-20 · **Current milestone:** 3 (`decompose` + `Send` fan-out)
+**Last updated:** 2026-09-21 · **Current milestone:** 4 (`gap_check` + depth recursion)
 
 **Who writes what:** you write the implementation (`src/`); Claude writes every test
 (since 2026-09-19) and keeps the docs (since 2026-09-20) — `docs/*.md` and the README.
@@ -17,8 +17,43 @@ Backed by `CLAUDE.md`, the output style, and `Edit(/tests/**)`, `Edit(/docs/**)`
 - [ ] *(Optional)* Delete the old 55 MB uv cache on C::
       `uv cache clean --cache-dir "$env:LOCALAPPDATA\uv\cache"`
 - [x] Fixed the four truncated comments in `state.py`
-- [x] Re-ran the paid integration test against the milestone 3 graph — **1 passed** in 16.58s
 - [x] Deleted `nodes/search.py`, superseded by `research_worker`
+- [ ] **Re-run the paid integration test** — milestone 4 changed the graph again, so the
+      2026-09-20 run no longer covers it. Now makes up to `MAX_DEPTH + 2` planner calls plus the
+      review: `uv run pytest -m integration`
+- [ ] Commit milestone 4, then record the hash here
+
+## Milestone 4: `gap_check` + depth recursion
+
+**Goal:** the run recurses — `gap_check` decides whether another round is worth it, `depth`
+bounds it, and `recursion_limit` is a backstop that should never fire.
+
+**Status (2026-09-21):** code complete, not committed. `uv run pytest`:
+**148 passed, 1 deselected** (up from 131). Decisions: D-075, D-076, D-077 (settling O-4).
+
+**Done:**
+- [x] `nodes/gap_check.py` — increments `depth` and nothing else (D-076)
+- [x] `graph.py`: `route_after_gap_check` and the cycle back to `decompose` (D-075)
+- [x] `state.py`: `seen_before_round`, the per-round baseline (D-075)
+- [x] `decompose` writes `seen_before_round` at the start of each round
+- [x] `config.py`: `MAX_DEPTH = 2`, `RECURSION_LIMIT = 15`
+- [x] `test_gap_check.py` (8) and `test_recursion.py` (6); `test_integration.py` now passes
+      `recursion_limit` in its config
+
+**Measured 2026-09-21:**
+- **`recursion_limit` minimum is 13**, found by bisection on the real graph shape — 12 raises
+  `GraphRecursionError`. `RECURSION_LIMIT = 15` leaves two steps of headroom, and a test asserts
+  a full-depth run fits. The skill previously advised 150, ~11× the real need.
+- **The limit is independent of `MAX_SUBTOPICS`:** a `Send` fan-out is one super-step however
+  wide. More subtopics cost wall-clock (D-064's rate limiting), never recursion budget.
+
+**The behaviour change that rippled through the tests:** a productive round *always* triggers a
+second `decompose` call — `gap_check` routes back, and only then does the explored filter empty
+the plan and end the run. Every test scripting one plan broke, because the planner received the
+review prose. `one_round_replies()` in `fakes.py` now encodes that property in one place.
+
+**Known follow-up:** D-022's ≥60% per-subtopic overlap check is now superseded for control flow
+(D-075 does the job at round level). Under Open: retire it, or keep the ratio as thesis evidence.
 
 ## Milestone 3: `decompose` + `Send` fan-out
 

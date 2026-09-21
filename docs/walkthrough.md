@@ -1,7 +1,7 @@
 # Walkthrough
 
-Two workflows, end to end, with real values captured from the code on 2026-09-20
-(milestone 2, commit `60611ac`):
+Two workflows, end to end, with real values captured from the code on 2026-09-21
+(milestone 4):
 
 1. **[The agent run](#1-the-agent-run)** — what happens when someone asks a question.
 2. **[The development cycle](#2-the-development-cycle)** — how a change gets made, using
@@ -14,34 +14,48 @@ Design reasoning lives in [`decisions.md`](decisions.md); what each file does is
 
 ## 1. The agent run
 
-Question in, cited review out. At milestone 2 the graph is linear —
-`intake → search → synthesize → check_citations` — and every value below is real,
-captured by running the graph against the saved arXiv fixture with the fake model.
+Question in, cited review out. At milestone 4 the graph recurses — the planner proposes
+subtopics, workers search them in parallel, and `gap_check` decides whether another round is
+worth it. Every value below is real, captured by running the graph against the saved arXiv
+fixture with the fake model.
 
-### Step 0 — The caller builds three dependencies
+```text
+START → intake → decompose → (Send per subtopic) → research_worker → gap_check
+                     ↑                                                   │
+                     └──────── depth left & new papers ──────────────────┘
+                                                                         │
+                                             synthesize ←────────────────┘
+                                                  │
+                                             check_citations → END
+```
 
-Nothing in the graph constructs its own model client, HTTP client or checkpointer
-(D-032, D-049). The caller owns all three, which is why the same graph code runs in
-tests, in the integration test, and later in the web layer:
+### Step 0 — The caller builds four dependencies
+
+Nothing in the graph constructs its own model client, HTTP client, rate limiter or
+checkpointer (D-032, D-049, D-064). The caller owns all four, which is why the same graph
+code runs in tests, in the integration test, and later in the web layer:
 
 ```python
 graph = build_graph(
     model_factory=get_chat_model,                              # tests: RecordingFactory()
     http_client=httpx.AsyncClient(timeout=ARXIV_TIMEOUT_SECONDS),
+    limiter=ArxivRateLimiter(ARXIV_MIN_INTERVAL_SECONDS),      # tests: NullLimiter()
     checkpointer=InMemorySaver(serde=build_serializer()),       # web layer: AsyncSqliteSaver
 )
 
 graph.astream(
     {"question": "What is attention in transformer models?"},
-    {"configurable": {"thread_id": "..."}},
+    {"configurable": {"thread_id": "..."}, "recursion_limit": RECURSION_LIMIT},
     context=RunContext(provider="openai"),   # per-run, never a module global (D-015)
     stream_mode=["updates", "messages"],
     version="v2",
 )
 ```
 
-The provider arrives through runtime `context`, not state and not a global, so two
-concurrent runs can't overwrite each other's choice.
+Two things that are easy to get wrong here. The provider arrives through runtime `context`,
+not state and not a global, so concurrent runs can't overwrite each other's choice. And
+`recursion_limit` is **invoke config, not graph config** — leave it out and LangGraph
+silently uses its default of 25 instead of the measured 15 (D-077).
 
 ### Step 1 — `intake`
 
@@ -49,36 +63,65 @@ Reads `state.question` and `runtime.context`. Writes back the stripped question.
 
 Its real job is to fail early: it raises `ValueError` if the context is missing or the
 provider isn't `openai`/`deepseek` (D-033). Without that check, calling the graph with no
-`context=` passes `None` through and dies later with an `AttributeError` far from the
-cause. A `Literal` type hint isn't enforced at runtime, so `RunContext(provider="gemini")`
+`context=` passes `None` through and dies later with an `AttributeError` far from the cause.
+A `Literal` type hint isn't enforced at runtime, so `RunContext(provider="gemini")`
 constructs happily — this is the only place that's caught.
 
-### Step 2 — `search`
+### Step 2 — `decompose` (the planner)
 
-Builds a deterministic arXiv query from the question. No LLM call:
+Asks the model to break the question into searchable subtopics, then **decides which to
+dispatch**. That split is the point: the planner *proposes*, the code *decides*.
+
+```python
+{"subtopics": ["attention mechanisms", "positional encoding"]}
+```
+
+The reply is parsed with `SubtopicPlan.model_validate_json(...)` — explicit validation in the
+node that receives it, because a model's reply is external data (D-013, D-070). It catches
+nothing, so an unparseable plan fails the run.
+
+Three hard filters then run in code. The explored list also goes into the prompt, but only as
+a hint — the planner is an LLM and will rephrase, repeat, or ignore it:
+
+| Filter | Why it's enforced in code |
+|---|---|
+| normalized form already in `explored_subtopics` | the prompt hint is advisory (D-017, D-022) |
+| `failed_subtopics` count ≥ 2, counted on the **normalized** form | the N=2 retry cap (D-020); raw counting lets a rephrasing reset the budget |
+| `build_search_query` would raise | `ValueError` isn't on the worker's catch list, so dispatching one would crash the run (D-059, D-073) |
+
+Writes `pending_subtopics` (no reducer — overwritten each round, D-017) and
+`seen_before_round`, the baseline `gap_check` compares against later.
+
+### Step 3 — `route_subtopics` (a conditional edge, not a node)
+
+```python
+Send("research_worker", {"subtopic": topic, "seen_paper_ids": state.seen_paper_ids})
+```
+
+One `Send` per subtopic, dispatched in parallel. The payload is a plain dict (a `TypedDict` at
+the type level) because **`Send` payloads are checkpointed** — a custom class comes back as a
+plain `dict` on *resume*, with only a logged warning (D-071).
+
+If `pending_subtopics` is empty it returns the node name `"synthesize"` instead. An empty
+`Send` list ends the run silently — no error, no downstream node, no review (D-069).
+
+### Step 4 — `research_worker` (one per subtopic, in parallel)
+
+Builds a query from **its subtopic**, not the question:
 
 ```
-"What is attention in transformer models?"
-  → build_search_query()
-  → "all:attention AND all:transformer AND all:models"
-```
+"attention mechanisms" → build_search_query() → "all:attention AND all:mechanisms"
 
-Stopwords (`what`, `is`, `in`) and punctuation are dropped, and each remaining term is
-ANDed. Measured on 2026-09-16: the raw question matched **327,597** papers, this query
-**14,338** far more relevant ones (D-051).
-
-The request that actually goes out:
-
-```
 https://export.arxiv.org/api/query
-    ?search_query=all%3Aattention+AND+all%3Atransformer+AND+all%3Amodels
-    &start=0
-    &max_results=10
+    ?search_query=all%3Aattention+AND+all%3Amechanisms&start=0&max_results=10
 ```
 
-The response is Atom XML, parsed by `parse_feed` with `defusedxml` and
-`forbid_dtd=True` — defusedxml accepts a bare `<!DOCTYPE>` by default, and this
-environment's expat is below 2.7.2 (D-047). Each `<entry>` becomes a `Source`:
+Every request runs inside `async with limiter:` — held across the whole request, not just its
+start, because arXiv allows one connection at a time *and* one request per three seconds
+(D-064). Parallel workers therefore queue for arXiv; the concurrency `Send` buys is in the
+LLM work.
+
+Each `<entry>` becomes a `Source`, parsed with `defusedxml` and `forbid_dtd=True` (D-047):
 
 ```python
 Source(
@@ -92,56 +135,57 @@ Source(
 )
 ```
 
-An entry that fails validation is **skipped and counted**, not fatal — one malformed
-entry shouldn't discard a good page of results. Only an unparseable feed or arXiv's error
-feed fails the search (D-045).
+**On success** it writes `sources`, `skipped_entries` (its own delta), `explored_subtopics`
+and `seen_paper_ids`. **On failure** it writes `failed_subtopics` and nothing else — a failed
+subtopic must stay unexplored so it can be retried (D-018).
 
-Writes `sources` and `skipped_entries`. At this milestone `search` catches nothing: with a
-single search there is nothing to continue with, so recording a failure would only hide it
-(D-053).
+What counts as a failure is deliberately narrow: transport errors, bad XML, validation
+failures, arXiv's error feed, and `HTTPStatusError` **only** for 429 and 5xx. Every other 4xx
+is re-raised, because a 400 means *we* sent something wrong — arXiv answers a malformed query
+that way, and absorbing it would retry a bug twice and then drop it silently (D-065).
 
-### Step 3 — `synthesize`
+### Step 5 — `gap_check`
 
-Two messages go to the model. The system prompt defines the citation contract; the human
-message carries the question plus the papers as a delimited data block:
+One line: `{"depth": state.depth + 1}`. It finds no gaps and calls no model — `decompose` is
+the gap finder. `gap_check` only counts the round; `route_after_gap_check` then decides:
+
+```python
+if state.depth > MAX_DEPTH:                              return "synthesize"
+if len(state.seen_paper_ids) == state.seen_before_round: return "synthesize"
+return "decompose"
+```
+
+Both conditions must hold to continue, and they differ in kind. `depth` is the hard ceiling
+(D-009) — hitting it means the run was cut off. The new-papers check is the **semantic exit**
+and should normally fire first: a round that retrieved nothing unseen would spend another paid
+planner call and another arXiv request to learn the same thing.
+
+State accumulates across rounds, so "what did *this* round add" isn't readable from totals —
+and a field with `operator.add` can't be reset by a node, since `reducer(current, 0) == current`.
+Hence `seen_before_round`, written by `decompose` at the start of each round (D-075).
+
+### Step 6 — `synthesize`
+
+Two messages go to the model. The papers arrive as a delimited data block:
 
 ```
 <papers>
 [arXiv:2411.18583] Automated Literature Review Using NLP Techniques and LLM-Based ...
 This research presents and compares multiple approaches to automate the generation of ...
-
-[arXiv:2502.00306] ...
 </papers>
 ```
 
-Two things are deliberate here:
+The marker before each title is the only citation format allowed, and the prompt states that
+everything inside `<papers>` is **data, not instructions** (D-055) — abstracts are untrusted
+third-party text.
 
-- **The marker before each title is the only citation format allowed.** The prompt requires
-  `[arXiv:<id>]` exactly — no version suffix, no URL, one paper per marker — because
-  `check_citations` has to be able to parse it in step 4.
-- **The prompt states that everything inside `<papers>` is data, not instructions**
-  (D-055). Abstracts are untrusted third-party text. This is the first concrete
-  prompt-injection defense; the rest is still Open.
+**If `sources` is empty, no model is built and no call is made**: it returns the fixed
+`NO_SOURCES_REVIEW` (D-060). Zero results is a success (D-021), and there's no model output
+that could invent a citation. The cost: that run streams nothing in `messages` mode.
 
-**If `sources` is empty, no model is built and no call is made** — `synthesize` returns the
-fixed `NO_SOURCES_REVIEW` (D-060). Zero results is a success (D-021), and there's no model
-output that could invent a citation or answer from general knowledge. The cost: that run
-streams nothing in `messages` mode.
+### Step 7 — `check_citations`
 
-### Step 4 — `check_citations`
-
-Extracts every citation from the review and validates each ID against the papers actually
-retrieved, using Pydantic **validation context**:
-
-```python
-Citation.model_validate({"arxiv_id": cited}, context={"known_ids": known_ids})
-```
-
-That lifts the check from "is this a well-formed arXiv ID" (D-041, which a plausible
-hallucination passes) to "is this one of the papers we actually read."
-
-It finds **citation attempts**, not just citations (D-062). `CITATION_BRACKET` matches any
-`[arXiv:...]` bracket; `CITATION_MARKER` then tries to parse each one:
+Finds every citation **attempt**, then tries to parse each one:
 
 | The model writes | Parsed? | Result |
 |---|---|---|
@@ -151,50 +195,73 @@ It finds **citation attempts**, not just citations (D-062). `CITATION_BRACKET` m
 | `[arXiv:A, B]` | no | violation: `[arXiv:A, B]` |
 | `[1]`, `[see Table 2]` | not a citation | ignored |
 
-The fourth row is why the permissive pattern exists. Matching only what the strict pattern
-understands would make an unreadable citation indistinguishable from *no* citation, so a
-review full of malformed markers would report zero violations — a false negative in the
-feature this whole project is about.
+The fourth row is why a permissive bracket pattern exists alongside the strict marker.
+Matching only what the strict pattern understands would make an unreadable citation
+indistinguishable from *no* citation, so a review full of malformed markers would report zero
+violations — a false negative in the feature this project is about (D-062).
+
+Validation uses Pydantic **context** (`context={"known_ids": ...}`), which lifts the check from
+"is this a well-formed arXiv ID" to "is this one of the papers we actually read". Missing
+context raises `RuntimeError`, not `ValueError`: Pydantic converts `ValueError` and
+`AssertionError` raised in a validator into `ValidationError`, which the node records as a
+violation — so a caller bug would mark *every* citation ungrounded.
 
 ### The stream, as the browser will see it
 
-Real chunk order from one run:
+Real chunk order from one run (two subtopics, one search round):
 
 ```
 updates   intake           -> wrote ['question']
-updates   search           -> wrote ['sources', 'skipped_entries']
-messages  synthesize       -> 'Retrieval'
-messages  synthesize       -> ' '
-messages  synthesize       -> 'grounds'
-   ... one chunk per token ...
-messages  synthesize       -> '[arXiv:2411.18583].'
+messages  decompose        -> 9 token chunks          ← the planner streams too
+updates   decompose        -> wrote ['pending_subtopics', 'seen_before_round']
+updates   research_worker  -> wrote ['sources', 'skipped_entries', 'explored_subtopics', 'seen_paper_ids']
+updates   research_worker  -> wrote ['sources', 'skipped_entries', 'explored_subtopics', 'seen_paper_ids']
+updates   gap_check        -> wrote ['depth']
+messages  decompose        -> 9 token chunks          ← round 2's planner
+updates   decompose        -> wrote ['pending_subtopics', 'seen_before_round']
+messages  synthesize       -> 23 token chunks
 updates   synthesize       -> wrote ['review']
 updates   check_citations  -> wrote ['citation_violations']
 ```
 
-**The `messages` chunks arrive before `synthesize`'s `updates` chunk.** Tokens stream
-*while* the node runs; the state write lands when it finishes. That ordering is what
-milestone 5's SSE design depends on — `updates` drives node-progress UI, `messages` drives
-the text appearing live.
+Three things worth reading off this trace:
 
-(The review text above comes from the fake model used in tests. Against real OpenAI the
-wording differs every run, which is why the integration test asserts *properties* — that
-the joined stream equals the saved review, that a citation exists, that violations are
-empty — never fixed text.)
+1. **`messages` chunks arrive before their node's `updates` chunk.** Tokens stream *while* the
+   node runs; the state write lands when it finishes. That ordering is what the milestone-5
+   SSE design depends on — `updates` drives node progress, `messages` drives live text.
+2. **`decompose` streams as well as `synthesize`.** A consumer that doesn't filter on
+   `metadata["langgraph_node"]` will render the planner's raw JSON into the user's review.
+3. **`decompose` runs twice for a one-round result.** `gap_check` saw new papers and routed
+   back; the second plan re-proposed the same subtopics, the explored filter dropped them all,
+   and the empty plan routed to `synthesize`. That second planner call is the real cost of
+   recursion when there's nothing new to find.
+
+The two `research_worker` entries are a **single super-step** — a `Send` fan-out is one step
+however wide, which is why `recursion_limit` doesn't depend on `MAX_SUBTOPICS`.
+
+(The review text is from the fake model used in tests. Against real OpenAI the wording differs
+every run, which is why the integration test asserts *properties* — that the joined stream
+equals the saved review, that a citation exists, that violations are empty — never fixed text.)
 
 Final state, checkpointed after every step:
 
 ```python
 question            = 'What is attention in transformer models?'
 review              = "Retrieval grounds a model's answer in papers it has just read [arXiv:2411.18583]."
-sources             = [3 Source objects]
+pending_subtopics   = []                       # emptied by round 2's filter — that's the exit
+explored_subtopics  = ['attention mechanisms', 'positional encoding']
+failed_subtopics    = []
+seen_paper_ids      = {'2411.18583', '2502.00306', '2510.22344'}
+sources             = [3 Source objects]       # both workers found the same 3; merge_sources dedups
 skipped_entries     = 0
+depth               = 1                        # one round completed
+seen_before_round   = 3                        # the baseline round 2 was measured against
 citation_violations = []
 ```
 
-Each field has exactly **one** writer, which is why no reducers exist yet. That changes at
-milestone 3, when parallel `Send` workers all write `sources` in the same step — and a
-missing reducer there raises `InvalidUpdateError` rather than silently overwriting.
+Six of these fields are written by **parallel** workers, so each needs a reducer or LangGraph
+raises `InvalidUpdateError` (D-067). `pending_subtopics`, `depth` and `seen_before_round` have
+single writers and deliberately have none.
 
 ---
 
@@ -309,13 +376,14 @@ and is worse than no example at all. Re-capture whenever any of these change:
 
 | Change | What goes stale in §1 |
 |---|---|
-| A node added, removed or renamed | the step headings, the stream-order block |
+| A node added, removed or renamed | the step headings, the graph diagram, the stream-order block |
 | A `ResearchState` field added or renamed | the final-state block, the one-writer note |
 | `build_search_query` or the arXiv params | the query string and the request URL |
 | `Source`'s fields | the `Source(...)` block |
 | The `synthesize` prompt or `format_papers` | the `<papers>` block |
 | Stream modes, or where tokens come from | the stream-order block and the note under it |
-| A new milestone's graph shape | most of §1 — rewrite rather than patch |
+| A new milestone's graph shape | most of §1 — rewrite rather than patch (done for milestone 4) |
+| A new reducer, or a field changing writer | the final-state block and the note under it |
 
 **How the values were captured:** the graph was run against the saved
 `tests/agent/fixtures/arxiv/search_ok.xml` fixture with `RecordingFactory` as the model

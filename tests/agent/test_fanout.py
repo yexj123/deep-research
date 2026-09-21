@@ -1,4 +1,4 @@
-"""Graph-level fan-out tests for milestone 3 (D-067, D-068, D-069, D-072).
+"""Graph-level fan-out tests (D-067, D-068, D-069, D-072).
 
 These run the whole graph, so they cover what the node-level tests can't: that Send actually
 dispatches one worker per subtopic, and that the reducers merge parallel updates correctly.
@@ -6,6 +6,9 @@ dispatches one worker per subtopic, and that the reducers merge parallel updates
 Ordering: assertions on fields written by parallel workers compare sorted values or sets,
 because Send dispatch order is observed behavior and not a documented LangGraph contract
 (D-068). The one test that does assert order is labelled as pinning that assumption.
+
+From milestone 4 these runs make two planner calls, not one: gap_check routes back after a
+productive round and the second plan is what ends the run (see one_round_replies).
 """
 
 import httpx
@@ -24,6 +27,7 @@ from tests.agent.fakes import (
     RecordingFactory,
     load_arxiv_fixture,
     make_arxiv_router_stub,
+    one_round_replies,
     plan_reply,
 )
 
@@ -176,7 +180,7 @@ async def test_skipped_entries_sums_across_workers(
     """
     stub = make_arxiv_router_stub({}, fallback=(load_arxiv_fixture("search_one_invalid_id.xml"), 200))
     async with stub.client:
-        graph = build_graph(RecordingFactory(replies=[plan_reply("alpha topic", "beta topic"), DEFAULT_REPLY]), stub.client, limiter, checkpointer)
+        graph = build_graph(RecordingFactory(replies=one_round_replies(plan=plan_reply("alpha topic", "beta topic"))), stub.client, limiter, checkpointer)
         output = await graph.ainvoke(
             {"question": "What is attention?"},
             _config("fanout-skipped"),
@@ -194,16 +198,21 @@ async def test_skipped_entries_sums_across_workers(
 async def test_one_worker_failing_does_not_stop_the_others(
     limiter: NullLimiter, checkpointer: InMemorySaver
 ) -> None:
-    """A failed subtopic is recorded while the healthy one still contributes papers (D-019, D-072).
+    """A failed subtopic is recorded, retried next round, and never blocks the healthy one.
 
-    This is the payoff for handling failures inside the worker: one flaky search doesn't
-    end a long run, and the failure becomes data rather than an exception.
+    The payoff for handling failures inside the worker (D-019, D-072): one flaky search
+    doesn't end the run, and the failure becomes data.
+
+    From milestone 4 it also demonstrates the retry: "alpha topic" failed, so it stays
+    unexplored (D-018) and the planner is allowed to propose it again next round. It fails a
+    second time, which spends the N=2 cap (D-020). "beta topic" succeeded, so the explored
+    filter drops it from the second plan.
     """
     stub = make_arxiv_router_stub(
         {"alpha": ("", 503)},
         fallback=(load_arxiv_fixture("search_ok.xml"), 200),
     )
-    factory = RecordingFactory(replies=[plan_reply("alpha topic", "beta topic"), DEFAULT_REPLY])
+    factory = RecordingFactory(replies=one_round_replies(plan=plan_reply("alpha topic", "beta topic")))
     async with stub.client:
         graph = build_graph(factory, stub.client, limiter, checkpointer)
         output = await graph.ainvoke(
@@ -213,9 +222,12 @@ async def test_one_worker_failing_does_not_stop_the_others(
             version="v2",
         )
 
-    assert output.value.failed_subtopics == ["alpha topic"]
-    assert output.value.explored_subtopics == ["beta topic"]
+    assert output.value.failed_subtopics == ["alpha topic", "alpha topic"], (
+        "one entry per failed attempt -- duplicates are the count (D-020, D-067)"
+    )
+    assert output.value.explored_subtopics == ["beta topic"], "failures stay unexplored (D-018)"
     assert len(output.value.sources) == 3
+    assert output.value.depth == 2, "round 1 added no new papers, so the run stopped (D-075)"
 
 
 @pytest.mark.asyncio
@@ -227,7 +239,7 @@ async def test_a_failed_subtopic_is_not_marked_explored(
     If a failure marked a subtopic explored, a temporary outage would permanently drop it.
     """
     stub = make_arxiv_router_stub({}, fallback=("", 503))
-    factory = RecordingFactory(replies=[plan_reply("alpha topic", "beta topic"), DEFAULT_REPLY])
+    factory = RecordingFactory(replies=one_round_replies(plan=plan_reply("alpha topic", "beta topic")))
     async with stub.client:
         graph = build_graph(factory, stub.client, limiter, checkpointer)
         output = await graph.ainvoke(
@@ -252,7 +264,7 @@ async def test_a_4xx_from_one_worker_fails_the_whole_run(
     our own mistakes crash.
     """
     stub = make_arxiv_router_stub({"alpha": ("", 400)}, fallback=(load_arxiv_fixture("search_ok.xml"), 200))
-    factory = RecordingFactory(replies=[plan_reply("alpha topic", "beta topic"), DEFAULT_REPLY])
+    factory = RecordingFactory(replies=one_round_replies(plan=plan_reply("alpha topic", "beta topic")))
     async with stub.client:
         graph = build_graph(factory, stub.client, limiter, checkpointer)
         with pytest.raises(httpx.HTTPStatusError):
@@ -398,4 +410,8 @@ async def test_final_state_is_a_research_state_after_fan_out(
 
     assert isinstance(output.value, ResearchState)
     assert output.value.review == DEFAULT_REPLY
-    assert output.value.pending_subtopics == ["attention mechanisms", "positional encoding"]
+    # Emptied by the second planner round: gap_check routed back, the planner re-proposed the
+    # same subtopics and the explored filter dropped them all, which is what ends the run
+    # (D-069, D-075). explored_subtopics is where the round's work is recorded.
+    assert output.value.pending_subtopics == []
+    assert sorted(output.value.explored_subtopics) == ["attention mechanisms", "positional encoding"]

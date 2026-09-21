@@ -1,10 +1,11 @@
 # Code map
 
 What each file does, what it uses, and what uses it. Built from the actual imports on
-2026-09-20. Design reasons are in [`decisions.md`](decisions.md) (the `D-` numbers).
+2026-09-21. Design reasons are in [`decisions.md`](decisions.md) (the `D-` numbers).
 
 **Status tags**
-- **[M3]**: new in milestone 3, implemented and tested (not committed yet)
+- **[M4]**: new in milestone 4
+- **[M3]**: added in milestone 3
 - **[M1]**: implemented and tested (milestone 1)
 - **[M2]**: added in milestone 2
 - **[M1 → M2]** / **[M1 → M3]**: from an earlier milestone, changed since
@@ -23,8 +24,8 @@ search, one per subtopic and with a catch list.
   wiring           agent/graph.py
                      │ registers the nodes and connects them
                      ▼
-  nodes            agent/nodes/intake.py · decompose.py · research_worker.py · synthesize.py
-                   check_citations.py
+  nodes            agent/nodes/intake.py · decompose.py · research_worker.py · gap_check.py
+                   synthesize.py · check_citations.py
                      │ read state, return partial updates
                      ▼
   building blocks  agent/llm.py (chat models) · agent/sources/arxiv.py (arXiv client and parser)
@@ -56,6 +57,7 @@ flowchart TD
     synth["nodes/synthesize.py"]
     decomp["nodes/decompose.py [M3]"]
     worker["nodes/research_worker.py [M3]"]
+    gap["nodes/gap_check.py [M4]"]
     ratelim["sources/rate_limit.py [M3]"]
     cites["nodes/check_citations.py [M2]"]
     llm["agent/llm.py"]
@@ -71,6 +73,7 @@ flowchart TD
     graph --> intake
     graph --> decomp
     graph --> worker
+    graph --> gap
     graph --> ratelim
     graph --> synth
     graph --> cites
@@ -85,6 +88,7 @@ flowchart TD
     worker --> arxiv
     worker --> config
     worker --> ratelim
+    gap --> state
     synth --> context
     synth --> llm
     synth --> models
@@ -123,7 +127,7 @@ The package itself, holding only a docstring. `tests/test_smoke.py` imports it t
 **Why it's separate from state:** the context is per-run input that isn't checkpointed; state is research
 data that is (D-015, D-032).
 
-### `agent/config.py` [M1 → M2]
+### `agent/config.py` [M1 → M4]
 **Defines:**
 - `API_KEY_ENV_VARS`: which environment variable holds each provider's key;
 - `MODEL_NAMES`: which model each provider uses;
@@ -142,11 +146,20 @@ data that is (D-015, D-032).
 - `ARXIV_MIN_INTERVAL_SECONDS = 3.0`, used by whoever creates the `ArxivRateLimiter` (D-064);
 - `MAX_SUBTOPICS = 3`, used by `nodes/decompose.py` for both the prompt and the filter cap (D-070).
 
-### `agent/state.py` [M1 → M3]
+**Milestone 4 added:**
+- `MAX_DEPTH = 2`, used by `graph.route_after_gap_check` — 0-indexed, so 3 search passes (D-026);
+- `RECURSION_LIMIT = 15`, used by the **caller** as invoke config. The graph never reads it: leave
+  it out of the config and LangGraph silently uses its default of 25 (D-077).
+
+### `agent/state.py` [M1 → M4]
 **Also defines the reducers** (D-067), kept beside the fields they serve so one file explains the
 whole state contract: `normalize_subtopic` (casefold + strip, D-017), `merge_subtopics` (dedup on
 the normalized form, storing the original text) and `merge_sources` (dedup on `arxiv_id`, keep
 first). Both copy before appending -- a reducer must never mutate its left argument.
+
+**Milestone 4 fields:** `depth` (rounds completed, written by `gap_check`, D-076) and
+`seen_before_round` (**no reducer**, overwritten by `decompose` — the baseline `gap_check`
+compares against to learn what a round added, D-075).
 
 **Milestone 3 fields:** `pending_subtopics` (**no reducer**, overwritten each round),
 `explored_subtopics`, `failed_subtopics` (`operator.add`, duplicates are the attempt count),
@@ -217,6 +230,16 @@ would come back as a plain `dict` on resume, D-071), `EXTERNAL_FAILURES`, `_is_e
 Every request runs inside `async with limiter:` (D-064).
 **Registered by:** `graph.py`, as `"research_worker"`, reached only via `Send`.
 
+### `agent/nodes/gap_check.py` [M4]
+**Defines:** `gap_check(state)`, a plain `def` that returns `{"depth": state.depth + 1}` and
+nothing else.
+**Reads:** `state.depth`. **Writes:** `depth`.
+**What it is not:** a gap finder. `decompose` finds gaps — it receives `explored_subtopics` and is
+asked for something new (D-070). This node only counts the round, and calls no model. The routing
+decision lives in `graph.py`'s `route_after_gap_check`, because which node runs next is ordering
+knowledge (rule 2 above).
+**Registered by:** `graph.py`, as `"gap_check"`.
+
 ### `agent/sources/rate_limit.py` [M3]
 **Defines:** `ArxivRateLimiter(min_interval)`, an async context manager holding an
 `asyncio.Semaphore(1)` **across** the request plus monotonic-clock spacing (D-064).
@@ -254,11 +277,14 @@ recorded verbatim. So a citation it can't read is never mistaken for a verified 
 is reported rather than accepted (D-046, D-062).
 **Registered by:** `graph.py`, as `"check_citations"`.
 
-### `agent/graph.py` [M1 → M3]
-**Defines:** `build_graph(model_factory, http_client, limiter, checkpointer)` (D-032, D-049, D-064)
-and `route_subtopics(state)`. Wiring: START → `intake` → `decompose` →
-*(conditional)* → `research_worker` (one per subtopic, via `Send`) → `synthesize` →
-`check_citations` → END.
+### `agent/graph.py` [M1 → M4]
+**Defines:** `build_graph(model_factory, http_client, limiter, checkpointer)` (D-032, D-049, D-064),
+`route_subtopics(state)` and `route_after_gap_check(state)`. Wiring: START → `intake` →
+`decompose` → *(conditional)* → `research_worker` (one per subtopic, via `Send`) → `gap_check` →
+*(conditional)* back to `decompose` **or** on to `synthesize` → `check_citations` → END.
+`route_after_gap_check` continues only when `depth` is not spent **and** the round added a paper
+not already in `seen_paper_ids` (D-075). It reads the depth `gap_check` just incremented: a
+conditional edge sees the node's update already applied.
 `route_subtopics` is **not a node**: it is the conditional edge out of `decompose`. It returns the
 node name `"synthesize"` when `pending_subtopics` is empty, and `Send` objects otherwise — an empty
 `Send` list ends the run silently, with no error and no review (D-069).
@@ -327,12 +353,14 @@ Claude writes and maintains every file here (since 2026-09-19; see `CLAUDE.md`).
 | `agent/test_reducers.py` [M3] | The merge reducers as pure functions: dedup keys, first-seen order, and that neither mutates its left argument (D-067) | `state.py` reducers, `make_source` |
 | `agent/test_decompose.py` [M3] | The planner's three hard filters, JSON validation, and `route_subtopics`' empty-plan guard (D-069, D-070, D-073) | `make_decompose`, `route_subtopics`, `fakes` |
 | `agent/test_research_worker.py` [M3] | The worker called directly: success contract, the 429/5xx-vs-4xx split, and that a failure never marks a subtopic explored (D-065, D-072) | `make_research_worker`, `fakes` |
+| `agent/test_gap_check.py` [M4] | The stopping rule as a pure function: depth accounting, and the two exits (D-075, D-076) | `gap_check`, `route_after_gap_check` |
+| `agent/test_recursion.py` [M4] | The whole cycle: a full-depth run fits RECURSION_LIMIT, 12 is one step too few, and each early exit (D-009, D-077) | `build_graph`, `make_arxiv_feed` |
 | `agent/test_fanout.py` [M3] | The whole graph fanning out: one worker per subtopic, reducers under parallel writes, partial failure, and which nodes stream (D-067, D-068, D-069) | `build_graph`, `fakes` |
 | `agent/test_checkpoint_roundtrip.py` [M2] | A `Source` comes back from a checkpoint as a `Source`, plus the control case (empty allowlist → `dict`) | `build_graph`, `build_serializer`, `JsonPlusSerializer`, `fakes` |
 
 ---
 
-## 5. One run, step by step (milestone 3)
+## 5. One run, step by step (milestone 4)
 
 ```text
 caller (test or web layer)
@@ -341,7 +369,8 @@ caller (test or web layer)
   3. limiter      = ArxivRateLimiter(ARXIV_MIN_INTERVAL_SECONDS)       (tests: NullLimiter())
   4. checkpointer  = InMemorySaver(serde=build_serializer())            (web layer: AsyncSqliteSaver)
   5. graph = build_graph(model_factory, http_client, limiter, checkpointer)
-  6. graph.astream({"question": ...}, {"configurable": {"thread_id": ...}},
+  6. graph.astream({"question": ...},
+                   {"configurable": {"thread_id": ...}, "recursion_limit": RECURSION_LIMIT},
                    context=RunContext(provider=...), stream_mode=[...], version="v2")
 
 inside the graph (a checkpoint is saved after every step)
@@ -353,6 +382,10 @@ inside the graph (a checkpoint is saved after every step)
     (one per subtopic, in parallel, one super-step)     → writes sources, skipped_entries,
                                                           explored_subtopics, seen_paper_ids
                                                         → on failure: failed_subtopics only
+  gap_check         reads depth                       → writes depth + 1 (D-076)
+  route_after_gap   (conditional edge, not a node)     → back to decompose while depth is
+                                                         left AND the round added a paper
+                                                         not already seen; else synthesize
   synthesize        reads question, sources, provider  → writes review (tokens stream)
                     (no sources: writes NO_SOURCES_REVIEW; no model is built)
   check_citations  reads review, sources              → writes citation_violations
@@ -368,7 +401,9 @@ inside the graph (a checkpoint is saved after every step)
 | `skipped_entries` [M2] | `research_worker` ‖ | nobody yet (shown in the report later) |
 | `explored_subtopics` [M3] | `research_worker` ‖ | `decompose` (filter + prompt) |
 | `failed_subtopics` [M3] | `research_worker` ‖ | `decompose` (N=2 retry cap) |
-| `seen_paper_ids` [M3] | `research_worker` ‖ | the `Send` payload; the overlap check at M4 (D-074) |
+| `seen_paper_ids` [M3] | `research_worker` ‖ | the `Send` payload; `route_after_gap_check` (D-075) |
+| `depth` [M4] | `gap_check` | `route_after_gap_check` (D-076) |
+| `seen_before_round` [M4] | `decompose` (overwrite) | `route_after_gap_check` (D-075) |
 | `review` | `synthesize` | `check_citations` |
 | `citation_violations` [M2] | `check_citations` | nobody yet (shown in the report / UI later). Unknown IDs *and* unparseable markers (D-062) |
 
@@ -401,6 +436,8 @@ The graph code is identical in all three columns. Only the dependencies passed i
 | `ARXIV_MAX_RESULTS` [M2] | `agent/config.py` | `nodes/research_worker.py` | D-052 |
 | `ARXIV_MIN_INTERVAL_SECONDS` [M3] | `agent/config.py` | whoever builds the `ArxivRateLimiter` | D-064 |
 | `MAX_SUBTOPICS` [M3] | `agent/config.py` | `nodes/decompose.py` (prompt + filter cap) | D-070 |
+| `MAX_DEPTH` [M4] | `agent/config.py` | `graph.route_after_gap_check` | D-025, D-026, D-076 |
+| `RECURSION_LIMIT` [M4] | `agent/config.py` | the **caller**, as invoke config — not the graph | D-077 |
 | `MAX_FAILURES` [M3] | `nodes/decompose.py` | the N=2 retry cap | D-020 |
 | `ARXIV_TIMEOUT_SECONDS` [M2] | `agent/config.py` | whoever creates the HTTP client (`test_integration.py` now) | D-052 |
 | `VALID_PROVIDERS` | `nodes/intake.py` (built from `ProviderType`) | `intake` | D-033 |

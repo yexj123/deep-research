@@ -28,6 +28,21 @@ def plan_reply(*subtopics: str) -> str:
 DEFAULT_PLAN_REPLY = plan_reply("attention mechanisms", "positional encoding")
 
 
+def one_round_replies(review: str = DEFAULT_REPLY, plan: str = DEFAULT_PLAN_REPLY) -> list[str]:
+    """Scripted replies for a run that does one search round and then stops.
+
+    Milestone 4 calls decompose a **second** time after any productive round: gap_check sees
+    new papers and routes back (D-075), and only then does the planner re-propose the same
+    subtopics, which the explored filter drops -- leaving pending empty so route_subtopics
+    goes to synthesize (D-069). So the model is built three times: plan, plan, review.
+
+    A test that scripts only [plan, review] gets the *review prose* handed to the second
+    decompose, which fails SubtopicPlan validation. That is what this helper exists to
+    prevent.
+    """
+    return [plan, plan, review]
+
+
 class NullLimiter:
     """A no-delay stand-in for ArxivRateLimiter (D-064), so tests don't wait 3 seconds.
 
@@ -105,6 +120,39 @@ def make_arxiv_stub(body: str, status_code: int = 200) -> ArxivStub:
         )
 
     return ArxivStub(client=httpx.AsyncClient(transport=httpx.MockTransport(handler)), requests=requests)
+
+
+_FEED_TEMPLATE = """<?xml version='1.0' encoding='UTF-8'?>
+<feed xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/" \
+xmlns:arxiv="http://arxiv.org/schemas/atom" xmlns="http://www.w3.org/2005/Atom">
+  <id>https://arxiv.org/api/synthetic</id>
+  <title>arXiv Query: synthetic</title>
+  <updated>2026-09-21T00:00:00Z</updated>
+{entries}
+</feed>
+"""
+
+_ENTRY_TEMPLATE = """  <entry>
+    <id>http://arxiv.org/abs/{arxiv_id}v1</id>
+    <title>Synthetic paper {arxiv_id}</title>
+    <updated>2026-09-21T00:00:00Z</updated>
+    <published>2026-09-21T00:00:00Z</published>
+    <link href="https://arxiv.org/abs/{arxiv_id}v1" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/{arxiv_id}v1" rel="related" type="application/pdf" title="pdf"/>
+    <summary>A synthetic abstract for {arxiv_id}, used where a test needs specific IDs.</summary>
+    <author><name>A. Tester</name></author>
+  </entry>"""
+
+
+def make_arxiv_feed(*arxiv_ids: str) -> str:
+    """A minimal valid Atom feed containing exactly these paper IDs.
+
+    The saved fixtures are real arXiv responses and stay that way. This builder covers tests
+    that need *specific* IDs -- a multi-round run, for instance, where each round has to
+    return papers the previous round didn't, or gap_check stops at round 1 (D-075).
+    """
+    entries = "\n".join(_ENTRY_TEMPLATE.format(arxiv_id=i) for i in arxiv_ids)
+    return _FEED_TEMPLATE.format(entries=entries)
 
 
 def make_arxiv_router_stub(

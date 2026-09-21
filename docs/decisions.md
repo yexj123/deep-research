@@ -803,10 +803,80 @@ and what was rejected. It's the answer to "why did you do it this way?"
   results". D-028's ≥3-results floor and D-021's zero-results path are unaffected and still apply
   when the check lands.
 
+## 2026-09-21
+
+### D-075 — `gap_check` is a termination check, not a gap finder
+- **Decision:** `gap_check` routes back to `decompose` only when **both** hold: `depth` is not
+  spent, **and** the round just finished contributed at least one paper not already in
+  `seen_paper_ids`. Otherwise it routes to `synthesize`. It calls no model.
+- **The division of labour:** `decompose` is the gap finder — it receives `explored_subtopics` and
+  is asked for something genuinely new (D-070). `gap_check` only answers "is another round worth
+  it?". Keeping discovery and termination in separate nodes is what makes the stopping rule
+  statable in one sentence, which the thesis evaluation needs.
+- **Why deterministic rather than an LLM judge:** it is free, reproducible, and testable with no
+  model. An LLM asked "are there still gaps?" can answer yes indefinitely, which would leave
+  `depth` as the *mechanism* rather than the backstop — the inversion D-009 warns against. Rejected
+  for now, not forever: revisit if measurement shows the run stops while obvious gaps remain.
+- **How a round's contribution is measured:** state accumulates across rounds, so `gap_check` cannot
+  read "what this round added" from totals. A field with `operator.add` **cannot be reset by a
+  node** either, because `reducer(current, 0) == current` — returning zero is a no-op. So
+  `decompose` writes `seen_before_round = len(state.seen_paper_ids)` at the start of each round, in
+  the same no-reducer, overwritten-each-round style as `pending_subtopics` (D-017), and `gap_check`
+  compares the current length against it.
+- **Consequence for D-022's paper-overlap rule:** the per-subtopic ≥60% overlap check now has a very
+  weak case. Its purpose was to avoid re-exploring a redundant subtopic, but it cannot run before
+  dispatch (D-074), and this round-level rule already stops the recursion when a whole round is
+  redundant. The overlap *ratio* may still be worth recording as thesis evidence; the
+  control-flow use is superseded. See Open → "Retire or repurpose D-022's overlap check".
+- **Consequence:** `route_subtopics` keeps returning `"synthesize"` for an empty plan (D-069) rather
+  than routing to `gap_check`. A round with nothing to research is itself the "no gaps left" signal,
+  and sending it round the loop would buy another paid planner call to learn the same thing.
+
+### D-076 — `gap_check` increments `depth`, then routes on the new value
+- **Decision:** `gap_check` returns `{"depth": state.depth + 1}` and decides using the incremented
+  value. `depth` therefore means **rounds completed**, and a full run ends with `depth == 3` when
+  `max_depth == 2`.
+- **Why here:** recursion control stays in one node. `gap_check` both decides whether to loop and
+  owns the counter that stops it; splitting them across `decompose` and `gap_check` would mean
+  reading two files to answer "why did this run stop?".
+- **Why increment-then-check:** the final checkpoint records what actually happened (three rounds
+  completed) rather than what was about to happen. Both orderings give the same three search passes
+  (D-026); only the recorded value differs.
+- **Single writer, so no reducer** (D-067). `depth` is never written by a parallel worker.
+- **Verified 2026-09-21** on a graph of this exact shape: `intake → decompose → Send → worker →
+  gap_check → {decompose | synthesize} → check_citations` produced three search passes
+  (`d=0, 1, 2`) and ended at `depth == 3`.
+
+### D-077 — `recursion_limit = 15` (settles O-4)
+- **Decision:** runs are invoked with `recursion_limit = 15`, and a test asserts a full-depth run
+  completes under it.
+- **Why 15:** measured 2026-09-21 by bisection on the real graph shape — **13 is the minimum**
+  (12 raises `GraphRecursionError`). The count is `intake` (1) + 3 rounds × [`decompose` + workers +
+  `gap_check`] (9) + `synthesize` + `check_citations` (2) = 12 super-steps, and LangGraph needs
+  super-steps **+ 1**. 15 leaves two steps of headroom without being generous enough to let a
+  runaway loop burn many paid calls.
+- **Independent of `MAX_SUBTOPICS`:** a `Send` fan-out is a single super-step however wide it is, so
+  changing subtopics-per-round costs wall-clock (rate limiting, D-064) but never recursion budget.
+  Worth knowing before anyone "fixes" a `GraphRecursionError` by raising the subtopic count.
+- **Why a test, not just a number:** `recursion_limit` is the backstop for a broken semantic exit
+  (D-009). A number nobody checks silently stops protecting anything once the graph grows a node.
+  Hitting `GraphRecursionError` means the `depth` exit is broken — raise the depth logic, not the
+  limit.
+- **Supersedes** the `langgraph-conventions` skill's previous advice to "set it explicitly and
+  generously, e.g. 150", which predates any measurement and is ~11× the real need.
+
 ## Open (proposed, not decided)
 
-**Settled 2026-09-20:** O-1 → D-064, O-2 → D-065, O-3 → D-066. The remaining numbering is unchanged
-so earlier references stay valid.
+**Settled 2026-09-20:** O-1 → D-064, O-2 → D-065, O-3 → D-066.
+**Settled 2026-09-21:** O-4 → D-077. The remaining numbering is unchanged so earlier references
+stay valid.
+
+- **Retire or repurpose D-022's ≥60% paper-overlap check.** D-075's round-level rule ("did this
+  round add a paper we hadn't seen?") supersedes its control-flow purpose, and D-074 established it
+  cannot run before dispatch anyway. Proposed: mark the overlap *skip* superseded, and decide
+  separately whether to record the overlap ratio per subtopic as thesis evidence about how much
+  subtopics duplicate each other. Cost of recording it: one more state field and reducer, with no
+  consumer in the agent itself.
 
 Each item lists the real options with their tradeoffs and a recommendation. A recommendation
 here is **not** a decision — it moves into the log with a new ID only once confirmed.
@@ -821,27 +891,7 @@ Nothing open blocks the `Send` fan-out.
 
 ### Needed for milestone 4 (`gap_check` + recursion)
 
-#### O-4 — The `recursion_limit` backstop value
-
-**Problem.** `max_depth = 2` is the real exit (D-009, D-025); `recursion_limit` is only the
-backstop for when the depth exit is broken. Its value was never chosen.
-
-**Measured 2026-09-20:** the milestone-2 graph (4 sequential nodes) needs `recursion_limit=5`;
-4 raises `GraphRecursionError`. So the limit must be **super-steps + 1**, one more than intuition
-suggests. A `Send` fan-out is a single super-step regardless of worker count.
-
-Projected milestone-4 arithmetic — `intake` (1) + 3 rounds x [`decompose` + workers + `gap_check`]
-(9) + `synthesize` + `check_citations` (2) = **12 super-steps, so >= 13**.
-
-| Option | Pros | Cons |
-|---|---|---|
-| **A. 15 — tight, just above the real need** | A broken depth exit trips it almost immediately, which is the entire point of a backstop | Any graph change needs the number revisited, or a legitimate run dies |
-| **B. 25 — LangGraph's default** | Nothing to justify; comfortable headroom | Roughly 2x the real need, so a runaway loop burns about twice as many paid calls before stopping |
-| **C. Derive it: `max_depth * 3 + 4`** | Self-adjusting when `max_depth` is tuned in the thesis evaluation | Hides a magic formula that silently goes wrong if the per-round node count changes |
-
-**Recommendation: A (15), with a test asserting a normal full-depth run completes under it.** That
-test is what makes the number defensible and catches the graph outgrowing it. Re-measure when the
-milestone-4 graph actually exists — the arithmetic above is projection, not measurement.
+O-4 settled as **D-077**.
 
 #### O-5 — Making failures visible
 
@@ -960,7 +1010,7 @@ return nothing.
 | ~~O-1~~ | arXiv rate limiter | **Settled → D-064** | ~~M3~~ |
 | ~~O-2~~ | 4xx vs 5xx | **Settled → D-065** | ~~M3~~ |
 | ~~O-3~~ | Models per role | **Settled → D-066** | ~~M3~~ |
-| O-4 | `recursion_limit` | 15, plus a test that a full-depth run fits | Milestone 4 |
+| ~~O-4~~ | `recursion_limit` | **Settled → D-077** (15, measured minimum 13) | ~~M4~~ |
 | O-5 | Failures visible | State first, `custom` events later; add a limitations section | Milestone 4 |
 | O-6 | Frontend | htmx — but verify its SSE + streaming-markdown story first | Milestone 5 |
 | O-7 | Public entry function | Build it at milestone 5, once the routes exist | Milestone 5 |

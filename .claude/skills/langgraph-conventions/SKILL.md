@@ -123,16 +123,28 @@ def route_subtopics(state: ResearchState) -> list[Send]:
 
 Two layers, not one:
 
-1. **Semantic exit** — a `depth` field in state; the `gap_check` conditional
-   edge routes to synthesis once `depth >= max_depth` or the last pass found
-   no new gaps. This is the real stop condition and should trigger well
-   before the graph gets anywhere near the hard limit.
-2. **Safety net** — `recursion_limit` in the invoke config (LangGraph's
-   default is 25, too low for a multi-round recursive fan-out; set it
-   explicitly and generously, e.g.
-   `graph.invoke(input, config={"recursion_limit": 150})`). If you ever hit
-   `GraphRecursionError` (from `langgraph.errors`), that means layer 1 didn't
-   fire — fix the semantic exit, don't just raise the number again.
+1. **Semantic exit** — a `depth` field in state. `gap_check` increments it and routes to
+   `synthesize` once `depth > max_depth`, **or** once a round adds no paper that wasn't
+   already in `seen_paper_ids` (D-075, D-076). This is the real stop condition.
+   `gap_check` decides termination; `decompose` is the gap *finder* — don't merge them.
+2. **Safety net** — `recursion_limit = 15` (D-077). **Measured, not guessed:** the real
+   graph needs a minimum of **13** (12 raises `GraphRecursionError`), from
+   `intake` (1) + 3 rounds × [`decompose` + workers + `gap_check`] (9) + `synthesize` +
+   `check_citations` (2) = 12 super-steps, and LangGraph needs super-steps **+ 1**.
+   A test asserts a full-depth run fits, so the number can't silently stop protecting
+   anything when the graph grows.
+
+**Two things that surprise people here:**
+- `recursion_limit` is **independent of `MAX_SUBTOPICS`** — a `Send` fan-out is one
+  super-step however wide. More subtopics cost wall-clock (D-064's rate limiting), never
+  recursion budget. Never "fix" a `GraphRecursionError` by changing the subtopic count.
+- A `GraphRecursionError` means **layer 1 didn't fire**. Fix the semantic exit; raising the
+  number just buys a more expensive version of the same bug.
+
+**Measuring a round's contribution:** state accumulates across rounds, so `gap_check` can't
+read "what this round added" from totals — and a field with `operator.add` **cannot be reset
+by a node**, since `reducer(current, 0) == current`. Use the `pending_subtopics` pattern: a
+no-reducer field (`seen_before_round`) that `decompose` overwrites each round.
 
 ## Citation grounding
 

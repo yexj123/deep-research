@@ -1,3 +1,5 @@
+"""decompose node: the planner proposes subtopics; this node decides which to dispatch (D-070)."""
+
 from collections import Counter
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -80,6 +82,12 @@ def make_decompose(model_factory: ModelFactory) -> DecomposeNode:
         # Catches nothing: with one planner there's nothing to continue with (D-070).
         plan = SubtopicPlan.model_validate_json(reply.text)
 
-        return {"pending_subtopics": _keep_worth_researching(plan.subtopics, state)}
+        return {
+            "pending_subtopics": _keep_worth_researching(plan.subtopics, state),
+            # The baseline gap_check compares against when this round ends, to learn whether
+            # the round added anything. Written here because this is where a round starts
+            # (D-075).
+            "seen_before_round": len(state.seen_paper_ids),
+        }
 
     return decompose

@@ -1,14 +1,18 @@
-"""Graph tests for milestone 3.
+"""Graph tests for milestone 4.
 
-START -> intake -> decompose -> (Send per subtopic) -> research_worker -> synthesize
-      -> check_citations -> END
+START -> intake -> decompose -> (Send per subtopic) -> research_worker -> gap_check
+              ^                                                             |
+              +------- depth left & new papers -------+                     |
+                                          synthesize <----------------------+
+                                               -> check_citations -> END
 
-No network: `fake_factory` scripts the planner's JSON then the review prose, `arxiv_ok` serves
-the saved 3-paper arXiv response, `limiter` is a zero-delay stand-in for the arXiv rate limiter,
-and `checkpointer` is a fresh InMemorySaver with the real serializer settings (see conftest.py).
+No network: `fake_factory` scripts the three model calls a one-round run makes (plan, plan,
+review -- see one_round_replies), `arxiv_ok` serves the saved 3-paper arXiv response, `limiter`
+is a zero-delay stand-in for the arXiv rate limiter, and `checkpointer` is a fresh InMemorySaver
+with the real serializer settings (see conftest.py).
 
-Fan-out behavior and the reducers under parallel writes live in test_fanout.py; this file covers
-the end-to-end path and intake's validation.
+Fan-out and the reducers under parallel writes live in test_fanout.py; the recursion cycle and
+its exits live in test_recursion.py. This file covers the end-to-end path and intake's validation.
 """
 
 import httpx
@@ -27,6 +31,7 @@ from tests.agent.fakes import (
     RecordingFactory,
     load_arxiv_fixture,
     make_arxiv_stub,
+    one_round_replies,
     plan_reply,
 )
 
@@ -78,7 +83,12 @@ async def test_updates_arrive_in_node_order(
     """`updates` chunks are keyed by node name and arrive in graph order.
 
     The two research_worker entries are one super-step: a Send fan-out dispatches in parallel,
-    so both workers report before synthesize begins (D-068).
+    so both workers report before gap_check begins (D-068).
+
+    decompose appears twice. gap_check routes back after a productive round (D-075); the
+    second plan re-proposes the same subtopics, the explored filter drops them all, and the
+    empty plan routes to synthesize (D-069). That second planner call is the real cost of
+    the recursion when there is nothing new to find.
     """
     graph = build_graph(fake_factory, arxiv_ok.client, limiter, checkpointer)
 
@@ -98,6 +108,8 @@ async def test_updates_arrive_in_node_order(
         "decompose",
         "research_worker",
         "research_worker",
+        "gap_check",
+        "decompose",
         "synthesize",
         "check_citations",
     ]
@@ -153,7 +165,10 @@ async def test_invented_citation_ends_up_in_state(
 ) -> None:
     """A reply citing a paper that wasn't retrieved is recorded by check_citations (D-046)."""
     factory = RecordingFactory(
-        replies=[plan_reply("attention"), "Transformers rely on attention [arXiv:1706.03762]."]
+        replies=one_round_replies(
+            plan=plan_reply("attention"),
+            review="Transformers rely on attention [arXiv:1706.03762].",
+        )
     )
     graph = build_graph(factory, arxiv_ok.client, limiter, checkpointer)
     output = await graph.ainvoke(
@@ -255,7 +270,7 @@ async def test_provider_from_context_reaches_the_factory(
         context=RunContext(provider="deepseek"),
         version="v2",
     )
-    assert fake_factory.providers == ["deepseek", "deepseek"], "decompose and synthesize each build a model"
+    assert fake_factory.providers == ["deepseek"] * 3, "two decompose rounds plus synthesize"
 
 
 # ---- Input and context validation in intake (D-033) -------------------------------

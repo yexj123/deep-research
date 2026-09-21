@@ -27,3 +27,15 @@ ARXIV_MIN_INTERVAL_SECONDS: float = 3.0
 # serialized at one request per ARXIV_MIN_INTERVAL_SECONDS (D-064), so subtopics x rounds is
 # wall-clock time. At max_depth = 2 this is 3 rounds x 3 subtopics ~ 27 s of rate-limit waiting.
 MAX_SUBTOPICS: int = 3
+
+# Recursion control, two layers (D-009).
+# 1. The semantic exit: gap_check increments `depth` and stops once it exceeds MAX_DEPTH
+#    (D-025, D-076). 0-indexed, so MAX_DEPTH = 2 means 3 search passes (D-026).
+MAX_DEPTH: int = 2
+# 2. The backstop. Measured 2026-09-21: the real graph needs a minimum of 13 -- intake (1)
+#    + 3 rounds x [decompose + workers + gap_check] (9) + synthesize + check_citations (2)
+#    = 12 super-steps, and LangGraph needs super-steps + 1. A Send fan-out is one super-step
+#    however wide, so this value does NOT depend on MAX_SUBTOPICS. Hitting
+#    GraphRecursionError means the semantic exit is broken -- fix that, not this number
+#    (D-077).
+RECURSION_LIMIT: int = 15

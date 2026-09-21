@@ -1,7 +1,12 @@
-"""Graph wiring for milestone 3.
+"""Graph wiring for milestone 4.
 
-START -> intake -> decompose -> (Send per subtopic) -> research_worker -> synthesize
-      -> check_citations -> END
+START -> intake -> decompose -> (Send per subtopic) -> research_worker -> gap_check
+              ^                                                              |
+              +------------------ depth left & new papers -------------------+
+                                                                             |
+                                        synthesize <-------------------------+
+                                             |
+                                        check_citations -> END
 """
 
 import httpx
@@ -10,10 +15,12 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Send
 
+from deep_research.agent.config import MAX_DEPTH
 from deep_research.agent.context import RunContext
 from deep_research.agent.llm import ModelFactory
 from deep_research.agent.nodes.check_citations import check_citations
 from deep_research.agent.nodes.decompose import make_decompose
+from deep_research.agent.nodes.gap_check import gap_check
 from deep_research.agent.nodes.intake import intake
 from deep_research.agent.nodes.research_worker import make_research_worker
 from deep_research.agent.nodes.synthesize import make_synthesize
@@ -42,6 +49,29 @@ def route_subtopics(state: ResearchState) -> str | list[Send]:
     ]
 
 
+def route_after_gap_check(state: ResearchState) -> str:
+    """Another round only if depth is left AND the last round found something new (D-075).
+
+    Reads the depth `gap_check` just incremented: a conditional edge sees the node's update
+    already applied (confirmed 2026-09-21).
+
+    Both conditions must hold, and they are different in kind. `depth` is the hard ceiling
+    (D-009, D-026) — hitting it means the run was cut off. The new-papers check is the
+    semantic exit, and it is the one that should normally fire: a round that retrieved
+    nothing unseen would spend another paid planner call and another arXiv request to learn
+    exactly the same thing.
+
+    State accumulates across rounds, so "what did this round add" is not readable from
+    totals. `decompose` records `seen_before_round` when the round starts; the comparison
+    here is what makes the contribution measurable (D-075).
+    """
+    if state.depth > MAX_DEPTH:
+        return "synthesize"
+    if len(state.seen_paper_ids) == state.seen_before_round:
+        return "synthesize"
+    return "decompose"
+
+
 def build_graph(
     model_factory: ModelFactory,
     http_client: httpx.AsyncClient,
@@ -60,6 +90,7 @@ def build_graph(
     builder.add_node("intake", intake)
     builder.add_node("decompose", make_decompose(model_factory))
     builder.add_node("research_worker", make_research_worker(http_client, limiter))
+    builder.add_node("gap_check", gap_check)
     builder.add_node("synthesize", make_synthesize(model_factory))
     builder.add_node("check_citations", check_citations)
 
@@ -68,7 +99,11 @@ def build_graph(
     # The third argument lists every node route_subtopics can reach, so LangGraph can draw
     # and validate the graph -- it can't infer them from the function body.
     builder.add_conditional_edges("decompose", route_subtopics, ["research_worker", "synthesize"])
-    builder.add_edge("research_worker", "synthesize")
+    builder.add_edge("research_worker", "gap_check")
+    # The cycle: back to decompose for another round, or out to synthesize (D-075).
+    builder.add_conditional_edges(
+        "gap_check", route_after_gap_check, ["decompose", "synthesize"]
+    )
     builder.add_edge("synthesize", "check_citations")
     builder.add_edge("check_citations", END)
     return builder.compile(checkpointer=checkpointer)
