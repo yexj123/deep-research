@@ -260,7 +260,7 @@ outcome above. Kept here as the record of what wasn't yours:
 | 4 | `gap_check` + depth recursion, retry cap, paper overlap | **O-4** `recursion_limit` value · **O-5** making failures visible |
 | 5 | Web layer: FastAPI + SSE + `AsyncSqliteSaver` | **Done, `ac20b98`** (D-080 – D-087) |
 | 6 | **Evaluation harness** — a baseline before anything changes | **O-11** framework + a frozen question set |
-| 7 | **Local-first corpus (BM25/FTS5)** | **O-13**  (measure with O-11) · full-text fetch trigger · staleness policy |
+| 7 | **Local-first corpus (BM25/FTS5)** | **O-13** `MIN_LOCAL_PAPERS` (measure with O-11) · full-text fetch trigger · staleness policy |
 | 8 | **In-band claim checker** | **O-12** — after 7, since chunks give it tighter context |
 
 Every open item now carries options, tradeoffs and a recommendation in
@@ -362,11 +362,11 @@ outweighs it here is **comparability**: a thesis number measured with a recogniz
 can be compared to published work; one from a bespoke judge invites "how do you know it's
 right?".
 
-**Already confirmed for O-13:** `sqlite-vec` is installed (transitively, via
-`langgraph-checkpoint-sqlite`) and works, so vectors can live in the same SQLite file as the
-checkpoints — following D-007 rather than fighting it. And arXiv's terms explicitly contemplate
-**building indexes** over full text; what they prohibit is *serving* PDFs. That keeps a local
-cache legitimate for a single-user app (D-008) and means **the cache must go if this is ever
+**Already confirmed for O-13:** SQLite FTS5 is compiled into the bundled SQLite (3.49.1), so
+lexical retrieval needs no dependency at all and lives in the same file as the checkpoints,
+following D-007 rather than fighting it. And arXiv's terms explicitly contemplate **building
+indexes** over full text; what they prohibit is *serving* PDFs. That keeps a local cache
+legitimate for a single-user app (D-008) and means **the cache must go if this is ever
 deployed for others** — a constraint to accept now rather than discover later.
 
 **Sequenced before O-13:** O-8's nonce delimiter. A full paper is roughly 40× more
@@ -399,7 +399,30 @@ well in March silently misses April's key paper. The fix isn't to defeat the cac
 report it: D-086's coverage gains "answered N of M subtopics from the corpus, indexed between
 X and Y, no new search performed." Same principle as reporting *why* a run stopped.
 
-**Confirmed, not assumed:** `sqlite-vec` is already installed and working, so vectors live in
-the existing SQLite file (D-007). fastembed's default `bge-small-en-v1.5` is **asymmetric** —
-queries and passages need different prefixes, and mixing them degrades retrieval with no
-error, so it needs a test that pins it.
+**Retrieval is BM25 via SQLite FTS5, not embeddings** (revised 2026-09-21). Exact jargon is
+what academic search runs on — verified that `'mamba'` and `'FlashAttention'` rank correctly
+under BM25, which is precisely what a 384-dim model blurs. FTS5 is compiled into the bundled
+SQLite, so there is no fastembed, no ONNX runtime and no model download. The strongest
+argument is consistency: arXiv matches lexically, so a lexical local tier makes "the corpus
+doesn't cover this" mean the same thing in both places — with embeddings locally and keywords
+remotely, a local miss might mean only that two retrieval methods disagreed. Dense retrieval
+is demoted to a **measured follow-on**, RRF hybrid to a decision after that.
+
+*(`sqlite-vec` was recommended earlier partly because it was already installed. Installed is
+not the same as warranted — recorded in O-13 as a reasoning error.)*
+
+**Two behaviours locked down in O-13 because they invert silently:**
+
+- `bm25()` returns **negative** scores, lower being better, so `ORDER BY bm25(t)` ascending is
+  best-first and adding `DESC` returns the worst matches with no error. Retrieval converts to
+  `relevance = -bm25(...)` at the boundary so nothing above it reasons about negatives. And
+  **absolute score thresholds are unusable**: a term in more than half the corpus gets
+  degenerate IDF and scores collapse toward zero regardless of match quality — measured,
+  `model` at 25/30 docs scores −0.000 while `attention` at 3/30 scores −1.820. Sufficiency
+  counts distinct *papers* instead.
+- **Lowercasing is a security property.** FTS5's word operators are case-sensitive:
+  `attention AND transformer` matched 2 documents as an operator, `attention and transformer`
+  matched 0 as a plain term. The existing lowercasing therefore neutralizes `AND`/`OR`/`NOT`/
+  `NEAR`, and someone preserving capitalization to be tidier would silently reintroduce
+  operator injection. Punctuation stripping (D-051) removes the symbolic operators and stops
+  an unterminated quote raising `OperationalError`.
