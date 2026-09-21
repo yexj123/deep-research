@@ -865,11 +865,64 @@ and what was rejected. It's the answer to "why did you do it this way?"
 - **Supersedes** the `langgraph-conventions` skill's previous advice to "set it explicitly and
   generously, e.g. 150", which predates any measurement and is ~11× the real need.
 
+### D-078 — The integration test asserts the citation checker works, not that the model behaved
+- **Decision:** the integration test requires (a) at least one citation of a paper that *was*
+  retrieved, and (b) that every recorded violation is genuinely absent from `sources`. It prints
+  any violations rather than failing on them. It no longer asserts `citation_violations == []`.
+- **Why:** observed 2026-09-21 on a real three-round run — `gpt-4o` cited **`2113.11460`**, a
+  fabricated ID, and `check_citations` caught it. That is D-046 working exactly as designed: a
+  well-formed ID the model invented passes the format check (D-041) and fails the retrieval check.
+  The old assertion treated that success as a failure.
+- **The distinction that matters:** citation grounding exists *because* models cite from memory.
+  Asserting the model never does conflates "the checker works" with "this run got lucky", and
+  makes the only test that talks to a real API randomly red — useless as a pre-demo gate.
+- **What still fails the build:** zero valid citations (the review cited nothing real), or a
+  violation that *was* retrieved. The second is a false positive and means the checker is broken,
+  which is a code bug.
+- **Rejected:** keeping `== []` (depends on behavior we don't control); strengthening the prompt
+  first and keeping the strict assertion (a paid run per attempt, and prompt adherence can never be
+  guaranteed — D-015 already notes DeepSeek is worse here).
+- **Note on `2113.11460`:** month 13, so not even a possible arXiv ID. D-056 chose the simple
+  digit rule over tying digit count to `YYMM`, and this is that tradeoff appearing in the wild. It
+  did not matter — grounding caught it regardless. The format check was never the defense, which
+  is the point of D-046.
+
+### D-079 — Recorded: ungrounded citations occur, and vary run to run
+- **Observations (2026-09-21, `gpt-4o`, real API, identical question and code):**
+
+  | Run | Shape | Ungrounded citations |
+  |---|---|---|
+  | milestone 2 | 1 search, 3 papers | 0 |
+  | milestone 4, run A | 3 rounds, ~9 subtopics | **1** (`2113.11460`, fabricated) |
+  | milestone 4, run B | 3 rounds, ~9 subtopics | 0 |
+
+- **The correction worth keeping.** Run A alone suggested "hallucination rises with recursion
+  depth", and that reading was written down before run B existed. Run B — same code, same
+  question, same model — produced none. So the honest claim is narrower: **ungrounded citations
+  happen, and they vary between identical runs.** Whether depth changes the *rate* is unresolved,
+  and two runs at one depth cannot resolve it.
+- **Why this is logged anyway:** it is the first real evidence that the grounding check catches
+  something a reader would otherwise have believed, and it is a standing warning against drawing a
+  trend from consecutive runs — which is exactly what nearly happened here.
+- **Competing explanations, untested:** more rounds means a longer `<papers>` block and more
+  distance between a claim and its abstract; or plain sampling variance. Only N runs per depth
+  separates them.
+- **Consequence:** `citation_violations` is **data**, not an assertion (D-078) — which is what
+  D-046 designed it to be. See Open → "Measure hallucination rate against recursion depth".
+
 ## Open (proposed, not decided)
 
 **Settled 2026-09-20:** O-1 → D-064, O-2 → D-065, O-3 → D-066.
 **Settled 2026-09-21:** O-4 → D-077. The remaining numbering is unchanged so earlier references
 stay valid.
+
+- **Measure hallucination rate against recursion depth (`notebooks/`).** D-079 records one
+  observation in each direction; a rate needs N runs per depth on the same questions, counting
+  `len(citation_violations)` and the number of citations. Proposed: a small harness that runs the
+  graph at `max_depth` 0, 1 and 2 over a fixed question set, since `max_depth` is already tunable
+  (D-025). Outputs a number the thesis can state: "ungrounded citations per 100 citations, by
+  depth". Worth doing before tuning `MAX_DEPTH` or `MAX_SUBTOPICS` — otherwise those are guesses.
+  Note the run is paid, so the question set should be small and fixed.
 
 - **Retire or repurpose D-022's ≥60% paper-overlap check.** D-075's round-level rule ("did this
   round add a paper we hadn't seen?") supersedes its control-flow purpose, and D-074 established it

@@ -18,10 +18,12 @@ Backed by `CLAUDE.md`, the output style, and `Edit(/tests/**)`, `Edit(/docs/**)`
       `uv cache clean --cache-dir "$env:LOCALAPPDATA\uv\cache"`
 - [x] Fixed the four truncated comments in `state.py`
 - [x] Deleted `nodes/search.py`, superseded by `research_worker`
-- [ ] **Re-run the paid integration test** — milestone 4 changed the graph again, so the
-      2026-09-20 run no longer covers it. Now makes up to `MAX_DEPTH + 2` planner calls plus the
-      review: `uv run pytest -m integration`
-- [ ] Commit milestone 4, then record the hash here
+- [x] Re-ran the paid integration test against the milestone 4 graph — **1 passed** in 35.34s
+- [x] Committed milestone 4 as `f34d0d8`
+- [ ] **Decide D-022's fate** — its per-subtopic overlap check is superseded for control flow by
+      D-075; retire it, or keep the ratio as thesis evidence (see Open)
+- [ ] **`notebooks/`: measure ungrounded citations against depth** (D-079, Open) — needed before
+      tuning `MAX_DEPTH` or `MAX_SUBTOPICS`, or those numbers are guesses
 
 ## Milestone 4: `gap_check` + depth recursion
 
@@ -51,6 +53,19 @@ bounds it, and `recursion_limit` is a backstop that should never fire.
 second `decompose` call — `gap_check` routes back, and only then does the explored filter empty
 the plan and end the run. Every test scripting one plan broke, because the planner received the
 review prose. `one_round_replies()` in `fakes.py` now encodes that property in one place.
+
+**What the milestone 4 integration runs showed (2026-09-21, `gpt-4o`, real API):** the recursion
+works end to end — three rounds, ~9 subtopics, all workers succeeding, the streamed text equalling
+the saved review, and `depth` stopping the run rather than `recursion_limit`.
+
+Two runs, one finding, and a correction. Run A produced a **fabricated citation**
+(`2113.11460` — month 13, not a possible arXiv ID) which `check_citations` caught: grounding
+working exactly as D-046 designed, since the format check passes and the retrieval check fails.
+That made the old `citation_violations == []` assertion wrong in kind — it treated the checker
+succeeding as a code failure — so D-078 changed the test to assert the *checker* works and report
+violations instead. Run B, identical in every respect, produced none. So the honest claim is
+"ungrounded citations happen and vary run to run", not "hallucination rises with depth" — a trend
+drawn from two consecutive runs that the third contradicted (D-079).
 
 **Known follow-up:** D-022's ≥60% per-subtopic overlap check is now superseded for control flow
 (D-075 does the job at round level). Under Open: retire it, or keep the ratio as thesis evidence.

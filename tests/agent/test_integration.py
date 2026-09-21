@@ -14,6 +14,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from deep_research.agent.config import (
     ARXIV_MIN_INTERVAL_SECONDS,
     ARXIV_TIMEOUT_SECONDS,
+    MAX_DEPTH,
     RECURSION_LIMIT,
 )
 from deep_research.agent.context import RunContext
@@ -41,10 +42,10 @@ async def test_real_run_streams_a_review_citing_only_retrieved_papers(
     A real model words its reply differently every run, so the test compares the
     run with itself instead of with fixed text.
 
-    Milestone 3 adds a real planner call and a real fan-out, so this makes MAX_SUBTOPICS + 1
-    paid calls (one per planner round plus the synthesis) and MAX_SUBTOPICS arXiv requests,
-    spaced by the real limiter at ARXIV_MIN_INTERVAL_SECONDS. Expect it to take roughly
-    MAX_SUBTOPICS x 3 seconds longer than the milestone 2 version.
+    From milestone 4 the run recurses, so the cost scales with rounds: up to MAX_DEPTH + 2
+    paid planner calls plus the synthesis, and up to (MAX_DEPTH + 1) x MAX_SUBTOPICS arXiv
+    requests, each spaced by the real limiter at ARXIV_MIN_INTERVAL_SECONDS. Measured
+    2026-09-21: about 38 s for a full three-round run.
     """
     config = _config("integration")
     tokens: list[str] = []
@@ -72,13 +73,47 @@ async def test_real_run_streams_a_review_citing_only_retrieved_papers(
     review = values["review"]
 
     assert values["sources"], "expected arXiv to return papers for this question"
-    # Milestone 3: a real planner must actually decompose, and a real fan-out must run more
-    # than one worker. With one subtopic this would silently degrade to a milestone 2 run.
-    assert len(values["pending_subtopics"]) > 1, f"planner proposed: {values['pending_subtopics']}"
-    assert sorted(values["explored_subtopics"]) == sorted(values["pending_subtopics"]), (
-        f"some subtopics failed: {values['failed_subtopics']}"
+
+    # A real planner must actually decompose and the fan-out must run more than one worker,
+    # or the run has silently degraded to a milestone 2 single search.
+    assert len(values["explored_subtopics"]) > 1, (
+        f"explored only {values['explored_subtopics']}, failed {values['failed_subtopics']}"
     )
+    # The recursion ran and stopped for a stated reason. depth counts rounds completed
+    # (D-076), so it is at least 1 and never past the ceiling -- exceeding it would mean the
+    # semantic exit failed and only recursion_limit was holding the run back (D-009, D-075).
+    assert 1 <= values["depth"] <= MAX_DEPTH + 1, f"depth ended at {values['depth']}"
+    # explored_subtopics accumulates across every round; pending_subtopics only ever holds the
+    # latest plan (D-017). They are equal only in a single-round run, which is why this
+    # asserts the relationship rather than equality.
+    assert set(values["pending_subtopics"]) <= set(values["explored_subtopics"]) | set(
+        values["failed_subtopics"]
+    ), "the last plan should be subtopics the run actually attempted"
+
     assert len(tokens) > 1, "expected the review to stream as several chunks"
     assert "".join(tokens) == review
-    assert CITATION_MARKER.search(review), "expected at least one [arXiv:<id>] citation"
-    assert values["citation_violations"] == [], f"cited papers that weren't retrieved: {values['citation_violations']}"
+
+    # Citation grounding: this asserts the *checker* works, not that the model behaved
+    # (D-078). Grounding exists precisely because models cite from memory -- requiring zero
+    # violations would conflate "the checker works" with "this run got lucky", and make the
+    # one test that talks to a real API randomly red.
+    known_ids = {source.arxiv_id for source in values["sources"]}
+    cited_ids = set(CITATION_MARKER.findall(review))
+    violations = values["citation_violations"]
+
+    assert cited_ids & known_ids, (
+        f"expected at least one citation of a retrieved paper; cited {cited_ids or 'nothing'}"
+    )
+    # No false positives: anything recorded must genuinely not be a retrieved paper. A
+    # violation that *was* retrieved would mean the checker is broken, which is a code bug
+    # and must fail.
+    for violation in violations:
+        assert violation not in known_ids, (
+            f"false positive: {violation!r} was retrieved but recorded as ungrounded"
+        )
+    if violations:
+        # Visible without failing the build. Observed 2026-09-21: one three-round run cited
+        # the fabricated ID '2113.11460' (month 13 -- not even a possible arXiv ID); the very
+        # next identical run produced none. Ungrounded citations happen and vary run to run;
+        # whether depth changes the rate is unresolved (D-079) and is notebooks/ work.
+        print(f"\nNOTE: {len(violations)} ungrounded citation(s) caught by check_citations: {violations}")
