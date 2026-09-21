@@ -18,7 +18,12 @@ review was written from.
 not a replacement. Never swap a measurement that needs no judge for one that does.
 """
 
+import json
 import os
+from collections.abc import Iterator
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
 
 import pytest
 from deepeval.metrics import AnswerRelevancyMetric, FaithfulnessMetric
@@ -37,6 +42,44 @@ JUDGE_MODEL = "gpt-4o-mini"
 # scores.
 FAITHFULNESS_FLOOR = 0.5
 RELEVANCY_FLOOR = 0.5
+
+RESULTS_FILE = Path(__file__).parent / "results.json"
+
+# Scores accumulate here and are written once at session end. A passing test only says "above
+# the floor", which is useless as a baseline: when O-13 lands, both runs would pass and the
+# comparison would be impossible. The number is the artifact, not the green tick.
+_SCORES: dict[str, dict[str, float]] = {}
+
+
+def _record_score(recording_id: str, metric: str, score: float) -> None:
+    _SCORES.setdefault(recording_id, {})[metric] = round(score, 4)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def write_results() -> Iterator[None]:
+    """Write the scores after the session, merging with whatever was there before.
+
+    Merging rather than overwriting means `-k attention` updates one entry instead of wiping
+    the rest -- the same reason recordings are one file per question.
+    """
+    yield
+    if not _SCORES:
+        return
+    existing: dict[str, Any] = {}
+    if RESULTS_FILE.exists():
+        existing = json.loads(RESULTS_FILE.read_text(encoding="utf-8"))
+    runs = existing.get("runs", {})
+    for recording_id, scores in _SCORES.items():
+        runs.setdefault(recording_id, {}).update(scores)
+    RESULTS_FILE.write_text(
+        json.dumps(
+            {"judge": JUDGE_MODEL, "scored_at": datetime.now(UTC).isoformat(), "runs": runs},
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
 
 RECORDINGS = load_all()
 needs_recordings = pytest.mark.skipif(
@@ -68,6 +111,8 @@ def test_every_citation_was_actually_retrieved(recording: Recording) -> None:
     and it is stronger evidence than any judged score. A violation here is the agent citing a
     paper it never retrieved.
     """
+    _record_score(recording.id, "ungrounded_citations", len(recording.citation_violations))
+    _record_score(recording.id, "papers_in_context", len(recording.retrieval_context))
     assert recording.citation_violations == [], (
         f"{recording.id}: ungrounded citations {recording.citation_violations}"
     )
@@ -102,6 +147,7 @@ def test_claims_are_supported_by_the_retrieved_papers(recording: Recording) -> N
     """
     metric = FaithfulnessMetric(threshold=FAITHFULNESS_FLOOR, model=JUDGE_MODEL)
     metric.measure(_case(recording))
+    _record_score(recording.id, "faithfulness", metric.score or 0.0)
 
     assert metric.score is not None and metric.score >= FAITHFULNESS_FLOOR, (
         f"{recording.id}: faithfulness {metric.score:.2f} "
@@ -121,6 +167,7 @@ def test_the_review_answers_the_question_asked(recording: Recording) -> None:
     """
     metric = AnswerRelevancyMetric(threshold=RELEVANCY_FLOOR, model=JUDGE_MODEL)
     metric.measure(_case(recording))
+    _record_score(recording.id, "relevancy", metric.score or 0.0)
 
     assert metric.score is not None and metric.score >= RELEVANCY_FLOOR, (
         f"{recording.id}: relevancy {metric.score:.2f} "

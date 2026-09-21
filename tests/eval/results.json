@@ -1,0 +1,12 @@
+{
+  "judge": "gpt-4o-mini",
+  "scored_at": "2026-09-21T14:53:46.251252+00:00",
+  "runs": {
+    "attention": {
+      "ungrounded_citations": 0,
+      "papers_in_context": 82,
+      "faithfulness": 0.9444,
+      "relevancy": 1.0
+    }
+  }
+}

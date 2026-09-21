@@ -1130,6 +1130,59 @@ and what was rejected. It's the answer to "why did you do it this way?"
   quality gates**, because a red test would mean "the model wrote a worse review today", which
   is not a code regression.
 
+### D-089 — The first baseline recording, and what it overturned
+
+**Recorded 2026-09-21**, one question (`attention`) against the real OpenAI and arXiv APIs,
+`gpt-4o`, `max_depth=2`, `max_subtopics=3`, `retrieval_unit="abstract"`. Scored with
+`gpt-4o-mini`.
+
+| | |
+|---|---|
+| Faithfulness | **0.944** |
+| Answer relevancy | **1.000** |
+| Ungrounded citations | **0** |
+| Papers in the synthesis prompt | **82** |
+| Distinct papers actually cited | **10** |
+| Subtopics explored | 9, none empty, none failed |
+| Stop reason | depth limit, not convergence |
+
+Four findings, three of which contradict something already written down.
+
+**1. The cost model in O-13 was wrong by roughly 12×.** It estimated "abstracts ≈ 2.5k
+tokens", assuming ten papers. A real run accumulates 3 subtopics × 3 rounds × 10 results and
+deduplicates to **82 papers ≈ 29k tokens** in a single synthesis prompt. The estimate assumed
+one round of one subtopic and was never checked against a run.
+
+**This inverts the argument for retrieval.** Full text in context would be 82 × ~8k ≈ **656k
+tokens**, which does not fit any current context window. So retrieval is not a cost
+optimization at this corpus size — it is the only way full text is possible at all.
+
+**2. Only 10 of 82 supplied papers were cited — 88% of the context went unused.** That is
+~25k tokens paid for on every run to no effect, and it points at a cheaper first win than
+anything in O-13: **select which abstracts reach the prompt**, rather than passing everything
+the recursion found. BM25 over the run's own papers, ranked against the question, needs no
+corpus, no embeddings and no PDFs. See Open → "Rank the synthesis context".
+
+**3. The run stopped on the depth ceiling, not on convergence.** `stopped_because` reported
+*"the depth limit was reached after 3 rounds; more rounds might have found more"*. So D-075's
+semantic exit never fired: every round found papers it had not seen. With ten results per
+search on a broad question there are essentially always new papers, which makes "did this
+round add anything?" too weak a stopping rule — and D-009 is explicit that `depth` should be
+the backstop, not the mechanism. See Open → "The semantic exit is not firing".
+
+**4. The baseline quality is already high, which is a problem for the RAG hypothesis.**
+Faithfulness 0.944 and relevancy 1.000 leave little headroom. If full-text retrieval is
+justified, it will not be by these two metrics on questions like this one — it is more likely
+to show up in *depth* of the review (method detail, numbers, limitations) than in whether
+claims are supported. Worth knowing **before** building O-13 rather than after: it suggests
+the evaluation needs a metric that captures depth, and that the honest thesis claim may be
+about what a review can *say*, not about whether it is faithful.
+
+**Why this entry exists.** Every number above was an estimate in a previous entry, written
+confidently. One recording, one question, 39 seconds and a few cents replaced four of them.
+That is the argument for O-11 preceding O-13, and it is worth pointing at when asked why the
+evaluation harness came first.
+
 ## Open (proposed, not decided)
 
 **Settled 2026-09-20:** O-1 → D-064, O-2 → D-065, O-3 → D-066.
@@ -1146,6 +1199,34 @@ stay valid.
   planner see earlier rounds' subtopics as explored, and does the new review replace or extend
   the old one. Note the graph currently ends at `check_citations`, so it has no notion of a
   second question against existing state.
+
+- **Rank the synthesis context (cheapest win found so far).** Measured in D-089: a real run put
+  **82 papers** in the synthesis prompt and the review cited **10**. That is ~25k tokens per run
+  bought for nothing, and it is fixable without a corpus, embeddings or PDFs — rank the run's
+  own papers against the question with BM25 and pass the top N. Proposed: reuse the FTS5
+  machinery O-13 needs anyway, over a temporary in-memory index of just this run's papers, so
+  the ranking code is written once and serves both. Open: what N is, which O-11 can measure
+  directly by re-recording at several values. **Likely worth more than full text**, and far
+  cheaper to build.
+
+- **The semantic exit is not firing.** D-075 stops a run when a round adds no paper the earlier
+  rounds had not seen. Measured in D-089: the run ended on the **depth ceiling** instead, having
+  found new papers in all three rounds — which D-009 explicitly says should not be how runs
+  normally end. With ten results per search on a broad question there are nearly always new
+  papers, so the rule is too weak to fire. Proposed alternatives, none decided: require a
+  *minimum number* of new papers rather than one; compare new papers against those actually
+  *cited* rather than merely retrieved; or accept that broad questions legitimately run to depth
+  and say so in the coverage report. Worth settling before `max_depth` is tuned, since tuning a
+  ceiling that is doing all the work is tuning the wrong thing.
+
+- **Evaluation needs a depth metric, not only faithfulness.** D-089 measured faithfulness 0.944
+  and relevancy 1.000 on the abstract-only baseline, which leaves almost no headroom for O-13 to
+  demonstrate improvement on either. If full text is worth its cost, the gain is in what the
+  review can *say* — method detail, reported numbers, stated limitations — not in whether its
+  claims are supported. Proposed: a G-Eval criterion scoring specificity (does the review cite
+  concrete methods and results, or only describe topics?), so the comparison can actually
+  distinguish the two retrieval units. Without it the thesis claim risks being "no measurable
+  difference", from a measurement that could not have detected one.
 
 - **Measure hallucination rate against recursion depth (`notebooks/`).** D-079 records one
   observation in each direction; a rate needs N runs per depth on the same questions, counting
