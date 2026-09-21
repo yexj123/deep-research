@@ -1150,6 +1150,140 @@ O-4 → **D-077** (recursion_limit = 15) · O-5 → **D-086** (coverage reportin
 O-6 → **D-080** (htmx + a small EventSource) · O-7 → **`agent/runner.py`**, whose shape came out
 of D-081 and D-084. Nothing open blocks the web layer.
 
+### Proposed next: measure first, then build (O-11 → O-13)
+
+These three are sequenced deliberately. O-11 establishes a baseline, O-13 is the change worth
+measuring, and O-12 sits between them as a product feature rather than a metric. Building
+O-13 first would make "full text improved the reviews" unfalsifiable.
+
+#### O-11 — An evaluation harness, before any RAG work
+
+**Problem.** The project measures citation *validity* exactly, for free, with no LLM judge:
+`citation_violations` answers "is this cited ID a paper we retrieved?" (D-046, D-062). Most
+RAG projects have nothing this good. But nothing measures the next question down — **claim
+support**:
+
+> "Smith et al. showed X [arXiv:1234.5678]" — valid ID, paper retrieved, and the paper never
+> says X.
+
+That gap gets worse with retrieval, because a chunk can be topically adjacent without
+supporting the claim. It is also what D-079's Open item needs and does not have: a harness
+for measuring hallucination rate against depth.
+
+| Option | Pros | Cons |
+|---|---|---|
+| **A. DeepEval** | **pytest-native**, which matches this repo directly — 207 tests, `--strict-markers`, and an existing `@pytest.mark.integration` convention for paid tests. An `@pytest.mark.eval` marker needs no new workflow. Covers agentic metrics, and this is an agent, not only a RAG pipeline | Another dependency, and its judge prompts are a black box you did not write |
+| **B. Ragas** | Four RAG metrics needing no ground-truth labels; a good **synthetic question generator**, which is exactly what the fixed question set below requires | RAG-shaped rather than agent-shaped; less natural to run from pytest |
+| **C. Roll your own claim check** | ~50 lines, defensible line by line, cheaper, and consistent with this project's pattern of preferring understood code to a dependency (D-042 chose `httpx` over the `arxiv` package; D-083 hand-rolled SSE) | For a thesis, "faithfulness measured with Ragas" is comparable to published work; "we wrote our own judge" invites *how do you know it's right?* |
+
+**Recommendation: A for running metrics, optionally B to generate the question set.** Worth
+naming the tension honestly: C is what this project would normally do, and the thing that
+outweighs it is **comparability** — a thesis number that cannot be compared to other work is
+worth much less than one that can.
+
+**Design points that matter more than the framework choice:**
+- **A fixed, committed question set (10–20 questions).** Results are only comparable across
+  changes if the input is identical. Generated once, reviewed by hand, then frozen.
+- **`@pytest.mark.eval`, deselected by default**, exactly as D-036 did for `integration`.
+  Evaluation is paid and slow; it must never run on `uv run pytest`.
+- **Pin and record the judge model.** A different judge produces different numbers, so an
+  unrecorded judge makes two runs incomparable — the same mistake as an unrecorded `max_depth`.
+- **The deterministic metrics stay primary.** `citation_violations` and D-086's coverage are
+  exact and free; the LLM metrics complement them. Do not replace a measurement that needs no
+  judge with one that does.
+
+**Cost:** roughly $0.001–0.003 per test case for five metrics with `gpt-4o-mini` as judge, so
+a 20-question set is cents per run. Cheap enough to run often, expensive enough not to run on
+every commit.
+
+#### O-12 — An in-band claim checker (the "reviewer agent")
+
+**Problem.** `check_citations` verifies the ID. Nothing verifies the claim.
+
+| Option | Pros | Cons |
+|---|---|---|
+| **A. One node, one call** — after `check_citations`, extract cited sentences and ask the model in a single call whether each is supported by its cited paper; record `unsupported_claims` | Exactly parallel to `check_citations`, and slots straight into D-086's coverage reporting: ID-level grounding *and* claim-level grounding, both surfaced | One more paid call per run, and it is an LLM judging an LLM — non-deterministic where the rest of this pipeline is not |
+| **B. One call per claim** | More accurate; each judgement sees only one claim | N× the cost and latency for a review that may make twenty claims |
+| **C. Don't build it; rely on O-11 offline** | No runtime cost, no new node | The *reader* never learns which claims are unsupported — only the thesis does. That is precisely the "reported success for less work than assumed" shape this project keeps fixing |
+
+**Recommendation: A, after O-13.** Chunks give a claim checker far tighter context to judge
+against than a 200-word abstract does, so it will work better once full text exists.
+
+**Two things to keep straight:**
+- **This is a product feature, not a thesis metric.** `unsupported_claims` is produced by the
+  same system being evaluated, so using it as your quality number is self-assessment. O-11's
+  independent judge is what the thesis reports; this is what the reader sees.
+- **Keep it to claim support only.** A reviewer that critiques structure or completeness would
+  be an LLM judging things code can already check, which cuts against D-070 (planner proposes,
+  code decides) and D-075 (deterministic termination over an LLM judge). Claim support is the
+  one thing here that genuinely cannot be checked deterministically — that is what justifies a
+  model doing it.
+
+#### O-13 — A full-text corpus with embedded retrieval
+
+**Problem.** Reviews are written from abstracts. An abstract is an author-written summary and
+is genuinely well-suited to "what does the field say" — but it carries no method detail, no
+numbers, and no limitations section.
+
+**The reframe that matters:** "download PDFs" and "RAG" are separate decisions. The real
+question is the *retrieval unit* — abstract → full text → chunks. Full text can go straight
+into context without any retrieval layer; RAG is what you reach for when the corpus exceeds
+the context window.
+
+**Measured cost per synthesis (approximate, 10 papers):**
+
+| Approach | Prompt tokens |
+|---|---|
+| Abstracts (today) | ~2.5k |
+| Full text in context, no retrieval | ~80k |
+| Chunk retrieval | ~10k |
+
+So retrieval is ~8× cheaper than stuffing full text and ~4× more than abstracts. Embedding is
+a negligible one-off: ~90 papers ≈ 720k tokens ≈ **$0.015** on a hosted small model, or free
+with a local one. **The persistent-corpus argument is the strong one** — a corpus amortizes
+across runs, which matches how a researcher actually works over months on one field.
+
+**Confirmed 2026-09-21:** `sqlite-vec` **is already installed**, arriving transitively with
+`langgraph-checkpoint-sqlite`, and vector search works. Vectors can live in the *same* SQLite
+file as the checkpoints and run history, which follows D-007 rather than fighting it. No new
+service, no separate vector database.
+
+**Legal position** (arXiv API terms of use, re-read 2026-09-21): storing and **serving** arXiv
+PDFs from your servers is prohibited, and users should be directed to arXiv for downloads. But
+*"if you build indexes or tools based on the full-text, you must link back to arXiv"* — index
+building is explicitly contemplated. A gitignored local cache on a single-user localhost app
+(D-008) is on the right side of that line and matches D-003. **The constraint this creates:**
+if this is ever deployed for other people, the PDF cache has to go. Decide that now, not after
+building on the assumption it can stay.
+
+**The questions to settle before writing code:**
+
+1. **Which papers get downloaded?** Up to 90 candidates per run at 3 s each (D-064 applies to
+   downloads too) is 4½ minutes before anything is written. Needs a selection rule — top-N by
+   relevance, or "not already in the corpus". This decides whether the feature feels good or
+   broken more than the retrieval quality does.
+2. **Does the review draw from the corpus or from this run's papers?** Drawing from the corpus
+   surfaces papers from earlier runs, which is a real feature — but it breaks D-086's coverage
+   statement. "This run explored X" becomes "the corpus holds Y, this run added Z", which is a
+   different and more honest sentence that has to be designed rather than patched.
+3. **Local or hosted embeddings?** D-022 rejected embeddings partly because *"every run would
+   depend on an embeddings API even when chat uses DeepSeek"*. A local ONNX model removes that
+   objection entirely and makes the corpus work offline; it costs a dependency and a model
+   download.
+4. **Chunking.** Scientific PDFs are two-column with equations, tables and references.
+   Section-aware chunking beats fixed-size but is harder; references and boilerplate should
+   probably be dropped entirely.
+5. **Injection surface.** D-055 treats abstracts as untrusted, and O-8's `</papers>` delimiter
+   gap is still open. A full paper is ~40× more attacker-controllable text than an abstract.
+   O-8's nonce delimiter should land **before** this, not after.
+
+**Recommendation:** build it as its own milestone with local embeddings and `sqlite-vec`, with
+every chunk carrying its `arxiv_id` — which leaves `check_citations` working unchanged, since
+the citation format is per-paper. **Keep the abstract-only path working as a switchable
+baseline.** "Abstracts vs full-text retrieval: citation accuracy and claim support" is a real
+thesis result, and it can only be reported if both paths exist. It also de-risks the work: if
+retrieval quality disappoints, a working system has not been destroyed to find that out.
+
 ### Ongoing / not milestone-gated
 
 #### O-8 — Prompt-injection defenses
@@ -1221,3 +1355,6 @@ return nothing.
 | O-8 | Prompt injection | Nonce delimiter; output sanitizing at milestone 5 | Any time |
 | O-9 | Accent spellings | Measure recall first, then decide | Any time |
 | O-10 | Non-English stopwords | Accept and document | Any time |
+| **O-11** | **Evaluation harness** | DeepEval (pytest-native) + a frozen question set; deterministic metrics stay primary | **Before O-13** |
+| **O-12** | **In-band claim checker** | One node, one call; a product feature, not a thesis metric | After O-13 |
+| **O-13** | **Full-text corpus + retrieval** | Local embeddings in the existing SQLite file; keep abstracts as a switchable baseline | Milestone 6 |

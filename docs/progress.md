@@ -258,7 +258,10 @@ outcome above. Kept here as the record of what wasn't yours:
 | 2 | One real source (arXiv), single subtopic, citation shape | **Done, ready to commit**: see the Milestone 2 section above (D-040 – D-062) |
 | 3 | `decompose` + `Send` fan-out, reducers | **Done, `b4a4dff`** (D-064 – D-074) |
 | 4 | `gap_check` + depth recursion, retry cap, paper overlap | **O-4** `recursion_limit` value · **O-5** making failures visible |
-| 5 | Web layer: FastAPI + SSE + `AsyncSqliteSaver` | **O-6** frontend (htmx or SvelteKit) · **O-7** public entry function |
+| 5 | Web layer: FastAPI + SSE + `AsyncSqliteSaver` | **Done, `ac20b98`** (D-080 – D-087) |
+| 6 | **Evaluation harness** — a baseline before anything changes | **O-11** framework + a frozen question set |
+| 7 | **Full-text corpus + retrieval** | **O-13** which papers to fetch · corpus-vs-run scope · local embeddings |
+| 8 | **In-band claim checker** | **O-12** — after 7, since chunks give it tighter context |
 
 Every open item now carries options, tradeoffs and a recommendation in
 [`decisions.md` → Open](decisions.md#open-proposed-not-decided), numbered `O-1` … `O-10`.
@@ -337,3 +340,34 @@ The graph compiles, the provider arrives through runtime context, tokens stream 
 - [x] PowerShell and `uv run pytest` permission allow rules
 - [x] `uv` installed and resolving on Claude Code's PATH
 - [x] uv cache moved to `E:\uv-cache` (no more hardlink warning)
+
+
+---
+
+## Next: measure before building (O-11 → O-13)
+
+Designed 2026-09-21, not started. The sequencing is the point: **O-11 first**, because
+without a baseline taken before the corpus work, "full text improved the reviews" is
+unfalsifiable.
+
+**The gap O-11 fills.** `citation_violations` measures citation *validity* exactly and for
+free — most RAG projects have nothing that good. Nothing measures **claim support**: "Smith
+showed X [arXiv:1234]" where the ID is real, the paper was retrieved, and the paper never says
+X. That gap widens with retrieval, since a chunk can be topically adjacent without supporting
+anything.
+
+**The tension worth naming.** This project's habit is to prefer code it can defend line by
+line over a dependency (D-042, D-083), which argues for a hand-written claim check. What
+outweighs it here is **comparability**: a thesis number measured with a recognized framework
+can be compared to published work; one from a bespoke judge invites "how do you know it's
+right?".
+
+**Already confirmed for O-13:** `sqlite-vec` is installed (transitively, via
+`langgraph-checkpoint-sqlite`) and works, so vectors can live in the same SQLite file as the
+checkpoints — following D-007 rather than fighting it. And arXiv's terms explicitly contemplate
+**building indexes** over full text; what they prohibit is *serving* PDFs. That keeps a local
+cache legitimate for a single-user app (D-008) and means **the cache must go if this is ever
+deployed for others** — a constraint to accept now rather than discover later.
+
+**Sequenced before O-13:** O-8's nonce delimiter. A full paper is roughly 40× more
+attacker-controllable text than an abstract, so the `</papers>` gap should close first.
