@@ -1016,6 +1016,29 @@ and what was rejected. It's the answer to "why did you do it this way?"
   D-081 claimed. The resumability story survives; only the state detection was wrong.
 - **Cost:** one bool in state. No reducer (single writer), no allowlist entry (a builtin).
 
+### D-085 — Review markdown is rendered on the server, with raw HTML escaped (settles O-8's second half)
+- **Decision:** `api/rendering.py` renders the review with
+  `MarkdownIt("commonmark", {"html": False, "linkify": False})`. The browser never parses
+  markdown: the `done` event carries `review_html`, already rendered and escaped.
+- **Why this is a real path, not a hypothetical one:** the review is written by a model that has
+  just read arXiv abstracts -- untrusted third-party text (D-055). An abstract carrying markup the
+  model copies into its answer becomes live HTML the moment the page assigns it to `innerHTML`.
+- **`html=False` is NOT the default.** Verified 2026-09-21: plain `MarkdownIt()` ships with
+  `html=True`, and `Hello <script>alert('xss')</script>` came out verbatim. With the option off it
+  renders as escaped, visible text. The tests pin this precisely because it is a default being
+  overridden -- drop the option and the app is exploitable with no other symptom.
+- **Confirmed safe by default:** `javascript:` and `data:` URLs in markdown link syntax are not
+  turned into links at all. Pinned anyway, since it is a default being relied on.
+- **Why server-side rather than in the browser:** the escaping lives in Python where it is
+  testable, and the page needs no client-side markdown library or sanitizer -- two fewer
+  dependencies, and no client-side sanitizer to configure wrongly.
+- **While streaming, tokens are plain text** (`textContent`, never `innerHTML`), so no HTML is
+  parsed on the streaming path at all. Formatting arrives with the `done` event. The tradeoff is
+  that formatting appears at the end rather than progressively; the gain is that an entire
+  vulnerability class is absent from the hot path.
+- **Also escaped:** the run history fragment, via Jinja2 autoescaping -- the review is not the
+  only model- or user-supplied string reaching the DOM.
+
 ## Open (proposed, not decided)
 
 **Settled 2026-09-20:** O-1 → D-064, O-2 → D-065, O-3 → D-066.

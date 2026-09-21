@@ -10,16 +10,18 @@ from pathlib import Path
 
 import httpx
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
 from deep_research.agent.config import ARXIV_MIN_INTERVAL_SECONDS, ARXIV_TIMEOUT_SECONDS
 from deep_research.agent.graph import build_graph
 from deep_research.agent.llm import ModelFactory, get_chat_model
 from deep_research.agent.sources.rate_limit import ArxivRateLimiter
-from deep_research.api.routes import runs
+from deep_research.api.routes import pages, runs
 from deep_research.persistence.checkpointer import open_checkpointer
 from deep_research.persistence.runs import init_runs_table
 
 DEFAULT_DB_PATH = str(Path("deep_research.sqlite").resolve())
+STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
 @asynccontextmanager
@@ -62,5 +64,7 @@ def create_app(
     app.state.db_path = db_path
     app.state.http_client = http_client
     app.state.limiter = limiter
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
     app.include_router(runs.router)
+    app.include_router(pages.router)
     return app

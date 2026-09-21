@@ -25,13 +25,13 @@ Backed by `CLAUDE.md`, the output style, and `Edit(/tests/**)`, `Edit(/docs/**)`
 - [ ] **`notebooks/`: measure ungrounded citations against depth** (D-079, Open) — needed before
       tuning `MAX_DEPTH` or `MAX_SUBTOPICS`, or those numbers are guesses
 
-## Milestone 5: web layer (backend)
+## Milestone 5: web layer
 
 **Goal:** the agent reachable over HTTP — start a run, stream it to a browser, read it back —
 on a real SQLite checkpoint file.
 
-**Status (2026-09-21):** backend complete, not committed. `uv run pytest`:
-**168 passed, 1 deselected** (up from 148). Decisions: D-080 – D-084, settling O-6 and O-7.
+**Status (2026-09-21):** complete. `uv run pytest`: **183 passed, 1 deselected** (up from 148).
+Decisions: D-080 – D-085, settling O-6, O-7 and O-8's XSS half. Backend committed as `7112477`.
 
 **Done:**
 - [x] Dependencies: `fastapi`, `uvicorn[standard]`, `langgraph-checkpoint-sqlite`, `jinja2` —
@@ -45,12 +45,24 @@ on a real SQLite checkpoint file.
 - [x] `state.py`: `citations_checked`, the terminal completion marker (D-084)
 - [x] `tests/api/` (13) over `httpx.ASGITransport`; `tests/agent/test_runner.py` (6)
 
-**Next:**
-- [ ] Frontend: Jinja2 templates + htmx + the `EventSource` review pane (D-080)
-- [ ] Run it for real: `uv run uvicorn deep_research.api.main:create_app --factory --reload`
-- [ ] Commit, then record the hash here
+- [x] Frontend: `templates/index.html`, `_history.html`, `static/app.js`, `static/app.css`
+- [x] `api/rendering.py` + `routes/pages.py` — server-rendered markdown, escaped (D-085)
+- [x] Verified against a real server: page, assets and the history fragment all serve, and a
+      question containing `<b>` renders escaped
+- [ ] Commit the frontend, then record the hash here
 
-**Three things measured while building this:**
+**Where htmx actually ended up.** D-080 expected it to handle the page, the form, history and
+the progress trail. In practice the run flow needs `fetch` + `EventSource` anyway, so the form
+and the trail are plain JS and **htmx handles the history list alone** (`hx-get` + a
+`refresh-history` event). That is a smaller footprint than the decision anticipated. It still
+earns its place — the alternative is hand-rolling a fetch-and-swap — but the honest framing is
+"one useful helper", not "the frontend framework".
+
+**Four things measured while building this:**
+- **`markdown-it-py`'s default is unsafe.** `MarkdownIt()` ships with `html=True`, so
+  `<script>` in a review passes straight through to the browser. Since the review is written by
+  a model that just read untrusted abstracts, that is a live XSS. Fixed with `html=False`
+  (D-085), and pinned by tests precisely because it is a default being overridden.
 - **`AsyncSqliteSaver.from_conn_string()` takes no `serde`** — using it silently discards the
   D-014 allowlist. Not a break today; a break later, announced only by a log line (D-082).
 - **`next == ()` does not mean "finished"** — with the production stream modes, an interrupted

@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from deep_research.agent.context import ProviderType
 from deep_research.agent.runner import RunState, get_review, get_run_state, stream_run
+from deep_research.api.rendering import render_review
 from deep_research.persistence.runs import Run, get_run, list_runs, record_run
 
 router = APIRouter(prefix="/runs", tags=["runs"])
@@ -126,11 +127,15 @@ async def stream(request: Request, thread_id: str) -> StreamingResponse:
         # Always terminate with the finished review, whether this call produced it or a
         # previous one did (the FINISHED case yields no chunks at all).
         values = await get_review(graph, thread_id)
+        review = values.get("review", "")
         yield _sse(
             "done",
             {
                 "thread_id": thread_id,
-                "review": values.get("review", ""),
+                "review": review,
+                # Rendered and escaped on the server (O-8): the page assigns this to
+                # innerHTML, so the browser must never be handed model-authored markdown.
+                "review_html": render_review(review),
                 "citation_violations": values.get("citation_violations", []),
             },
         )

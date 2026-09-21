@@ -1,0 +1,11 @@
+{# Run history fragment, swapped in by htmx. Jinja2 autoescapes, so a question containing
+   markup renders as text -- the same concern as the review (O-8), handled by the template
+   engine rather than by hand. #}
+{% for run in runs %}
+  <li>
+    <div>{{ run.question }}</div>
+    <div class="meta">{{ run.provider }} &middot; {{ run.created_at[:16].replace("T", " ") }}</div>
+  </li>
+{% else %}
+  <li class="meta">No runs yet.</li>
+{% endfor %}

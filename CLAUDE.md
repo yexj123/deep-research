@@ -71,7 +71,8 @@ You're the architect and reviewer, not the typist.
 - Streaming: Server-Sent Events wrapping `graph.astream(..., stream_mode=
   ["updates","custom","messages"])` — full pattern in `web-architecture`
 - Persistence: SQLite via `langgraph-checkpoint-sqlite` (`AsyncSqliteSaver`)
-- Frontend: **TODO** — decide together, tradeoffs in `web-architecture`
+- Frontend: no build step — Jinja2 templates and static files served by the
+  same FastAPI process (D-080). Nothing to run separately. — decide together, tradeoffs in `web-architecture`
 - Package manager: uv (`uv.lock` is committed; `uv sync` installs)
 
 ## Legal / licensing ground rules (settled — don't re-litigate per session)
@@ -143,7 +144,8 @@ conversation.
 - Backend run: `uv run uvicorn deep_research.api.main:create_app --factory --reload`
   (`create_app` is a factory, not a module-level `app`, so tests can inject fakes — D-032)
 - Test: `uv run pytest`
-- Frontend: **TODO**
+- Frontend: no build step — Jinja2 templates and static files served by the
+  same FastAPI process (D-080). Nothing to run separately.
 
 ## Skills & subagents in this project
 

@@ -1,0 +1,67 @@
+:root {
+  --fg: #1a1a1a;
+  --muted: #666;
+  --line: #e0e0e0;
+  --accent: #2b5797;
+  --warn: #8a4b00;
+  --warn-bg: #fff6e5;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0 auto;
+  padding: 2rem 1.5rem 4rem;
+  max-width: 46rem;
+  font: 16px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: var(--fg);
+}
+
+h1 { margin: 0 0 .25rem; font-size: 1.6rem; }
+h2 { margin: 2rem 0 .75rem; font-size: 1.1rem; color: var(--muted); font-weight: 600; }
+.subtitle { margin: 0 0 2rem; color: var(--muted); }
+
+form { display: flex; flex-direction: column; gap: .75rem; }
+label { font-size: .85rem; color: var(--muted); }
+textarea, select {
+  font: inherit;
+  padding: .6rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+textarea { resize: vertical; }
+
+.row { display: flex; align-items: center; gap: .75rem; }
+.row label { margin-left: auto; }
+
+button {
+  font: inherit;
+  padding: .6rem 1.2rem;
+  border: 0;
+  border-radius: 6px;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+}
+button:disabled { background: var(--muted); cursor: progress; }
+
+#progress { margin: 0; padding-left: 1.25rem; color: var(--muted); }
+#progress li { margin: .2rem 0; }
+
+/* Streaming text arrives as plain text and must keep its line breaks until the server's
+   rendered HTML replaces it (O-8). */
+#review { white-space: pre-wrap; }
+#review:has(h2), #review:has(p) { white-space: normal; }
+#review h2 { color: var(--fg); margin-top: 1.5rem; font-size: 1.05rem; }
+
+.warn {
+  padding: .75rem;
+  border-left: 3px solid var(--warn);
+  background: var(--warn-bg);
+  color: var(--warn);
+  font-size: .9rem;
+}
+
+#history { list-style: none; margin: 0; padding: 0; }
+#history li { padding: .5rem 0; border-bottom: 1px solid var(--line); font-size: .95rem; }
+#history .meta { color: var(--muted); font-size: .8rem; }

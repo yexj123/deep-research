@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Deep Research</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header>
+    <h1>Deep Research</h1>
+    <p class="subtitle">Ask a research question. The agent searches arXiv, decomposes into
+      subtopics when it finds gaps, and writes a review that cites only what it retrieved.</p>
+  </header>
+
+  <main>
+    <form id="ask">
+      <label for="question">Research question</label>
+      <textarea id="question" name="question" rows="3" required
+                placeholder="What is attention in transformer models?"></textarea>
+
+      <div class="row">
+        <label for="provider">Model</label>
+        <select id="provider" name="provider">
+          <option value="openai">OpenAI</option>
+          <option value="deepseek">DeepSeek</option>
+        </select>
+        <button type="submit" id="submit">Research</button>
+      </div>
+    </form>
+
+    <section id="progress-panel" hidden>
+      <h2>Progress</h2>
+      <!-- One entry per finished node, from the `updates` stream. -->
+      <ol id="progress"></ol>
+    </section>
+
+    <section id="review-panel" hidden>
+      <h2>Review</h2>
+      <!-- While streaming this holds plain text (textContent, never innerHTML). The final
+           HTML arrives already rendered and escaped by the server (O-8). -->
+      <article id="review"></article>
+      <p id="violations" class="warn" hidden></p>
+    </section>
+
+    <section id="history-panel">
+      <h2>Earlier runs</h2>
+      <!-- htmx: the one place it genuinely earns its keep here. Refreshed after each run. -->
+      <ul id="history" hx-get="/history" hx-trigger="load, refresh-history from:body"></ul>
+    </section>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.10/dist/htmx.min.js"
+          integrity="sha384-H5SrcfygHmAuTDZphMHqBJLc3FhssKjG7w/CeCpFReSfwBWDTKpkzPP8c+cLsK+V"
+          crossorigin="anonymous"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>
