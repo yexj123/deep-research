@@ -28,9 +28,11 @@ Backed by `CLAUDE.md`, the output style, and `Edit(/tests/**)`, `Edit(/docs/**)`
       difference, so `MAX_DEPTH` is *not* being tuned on this data (O-14 says why)
 - [x] **O-14, step 1: a narrow-question set at d0 vs d2** (D-095, `e326202`) — recorded and
       scored; depth fails on intersection questions too, and fails hardest there
-- [ ] **Decide O-14's two `src/` changes** — `MAX_DEPTH = 1`, and a yield-based exit that
-      stops on empty searches. Claude has measured and recommended; the implementation and the
-      call are yours
+- [x] **O-14 settled → D-096 (`pending`)** — adaptive exits instead of a lower `MAX_DEPTH`:
+      −66% arXiv searches, quality flat, 19/20 runs stop after one round. `MAX_DEPTH` stays 2
+- [ ] **Review D-096's `src/` changes** — `agent/exits.py` (new), plus the edits to `graph.py`,
+      `coverage.py`, `state.py` and `decompose.py`. Written at your instruction rather than
+      proposed, so it is the one part of `src/` you have not defended line by line yet
 - [ ] **`notebooks/`: measure ungrounded citations against depth** (D-079, Open) — the three
       depth arms now exist, so this is a re-score of recorded data rather than new runs
 
@@ -379,6 +381,43 @@ converged* — the exact claim the experiment existed to test. Fixed, and pinned
 `tests/eval/test_recordings_are_consistent.py`, which asserts on committed JSON at zero cost
 that a run using its whole depth budget can never report convergence. Fourth appearance of
 the D-062/D-069/D-084 pattern, first one inside the measuring instrument.
+
+## Adaptive exits shipped — two thirds of the searches gone (D-096)
+
+D-095 recommended lowering `MAX_DEPTH`. What shipped instead leaves the ceiling at 2 and makes
+the *exits* adaptive, which buys the same saving while keeping the reason visible in the
+coverage panel — and without capping the one question in twenty that genuinely needs a second
+round.
+
+Two rules, each one a measured mechanism turned into code: **stop when the synthesis prompt is
+already full** (D-091 truncates to 20, so further rounds only reshuffle) and **stop when half a
+round's searches came back empty** (D-095's void-drilling).
+
+**Measured on the real agent**, both sets re-recorded and scored — 20 paired questions against
+the fixed ceiling:
+
+| | fixed | adaptive |
+|---|---|---|
+| arXiv searches | 9.60 | **3.25** (−66%, −23.2 SE) |
+| rounds | 3.00 | **1.05** |
+| specificity | 0.77 | 0.78 (+1.2 SE) |
+| papers cited | 7.40 | 7.95 (+1.0 SE) |
+
+**19 of 20 runs now stop after one round.** Against the *cheapest* arm every metric is within
+2 SE, so this matches one-round cost and one-round quality while keeping recursion available.
+One ungrounded citation appeared (`rag`) where the fixed arms had none — one occurrence is not
+a rate, but it is recorded rather than omitted and is worth watching next sweep.
+
+**The exit that was asked for could not have worked alone.** Round 1 never comes back empty —
+0 of 20 questions — so an empty-based rule can only fire after the cost is spent. It is
+implemented because it is correct and matters if the ceiling is raised, but sufficiency is
+what does the work. Measuring before building caught that; shipping it blind would have
+repeated D-094.
+
+**Second drift between routing and reporting, caught by inspecting the first adaptive
+recordings.** They claimed the semantic exit had fired when the prompt had simply filled. The
+rules now live in `agent/exits.py`, read by both `graph.py` and `coverage.py`, with
+`tests/agent/test_exits.py` pinning that they can never disagree again.
 
 ## Depth retested where it should have won — and lost (D-095)
 

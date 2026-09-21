@@ -1564,6 +1564,80 @@ noticeably more interesting than depth.
 
 **Cost of the finding:** two recording sweeps (~9.5 min) and one scoring sweep (~11 min).
 
+### D-096 — Adaptive exits: two thirds of the searches removed, no quality cost
+
+**What was chosen.** Two new conditions in `route_after_gap_check`, and **`MAX_DEPTH` left at
+2**. Depth becomes adaptive rather than fixed: the ceiling stays a backstop, and a run that
+has what it needs stops on its own.
+
+1. **The synthesis prompt is already full.** `rank_sources` truncates to `SYNTHESIS_TOP_N`
+   (D-091), so once a run holds that many papers another round can only reshuffle which ones
+   the model sees. This is D-094's mechanism turned into a rule.
+2. **The round came back empty** — at least half of its subtopics returned zero papers. This
+   is D-095's mechanism turned into a rule.
+
+**Measured on the real agent**, both question sets re-recorded and scored (20 paired
+questions, `*-d2-adaptive` against `*-d2-fixed`):
+
+| metric | fixed ceiling | adaptive | delta | SE |
+|---|---|---|---|---|
+| arXiv searches | 9.60 | **3.25** | −6.35 | **−23.2** |
+| papers retrieved | 72.30 | 29.00 | −43.30 | −10.9 |
+| rounds | 3.00 | **1.05** | −1.95 | −39.0 |
+| empty subtopics | 0.60 | 0.10 | −0.50 | −2.4 |
+| papers cited | 7.40 | 7.95 | +0.55 | +1.0 |
+| specificity | 0.77 | 0.78 | +0.01 | +1.2 |
+| faithfulness | 0.98 | 0.98 | +0.01 | +0.5 |
+
+**−66% of the arXiv traffic and −60% of the retrieval, with every quality metric flat or
+nominally better.** Against the cheapest arm (`d0-fixed`) every single metric is within 2 SE,
+so the adaptive run matches one-round cost *and* one-round quality while keeping the recursion
+available.
+
+**19 of 20 runs stop after one round.** The twentieth, `fed-privacy`, found only 19 papers in
+its first round — one short of the cap — and correctly took a second, reaching 47. That single
+case is the entire reason `MAX_DEPTH` was not simply set to 0.
+
+---
+
+**Why not `MAX_DEPTH = 0`, which D-095 recommended and which is what was asked for.** It buys
+the same saving. What it does not buy is the *reason*: a constant records a conclusion, a rule
+records the mechanism, and the run can then explain itself in the coverage panel ("enough
+papers were found to fill the synthesis context"). It would also cap `fed-privacy` and any
+future question like it at a round that demonstrably had not finished. **Rejected on the
+grounds that it hides why, not on the numbers** — the numbers are equivalent.
+
+**Why the requested yield exit could not work alone.** The instruction was to stop when a
+search comes back empty. Measured first: **round 1 never comes back empty** — 0 of 20
+questions, in both sets. Empties appear only in rounds 2 and 3, which is *after* the cost has
+been spent. An empty-based rule alone would therefore have fired only once the run was nearly
+over. It is implemented anyway, because it is correct and it matters the moment `MAX_DEPTH` is
+raised, but the exit that actually does the work is sufficiency. Had this not been measured
+first, the shipped feature would have been the one that cannot fire — the D-094 mistake again.
+
+**Honest flag: one ungrounded citation appeared** (`rag`, broad set) where the fixed arms had
+none across 40 recordings. One occurrence in 20 runs is not a rate, and nothing in the change
+touches citation grounding — but it is recorded here rather than omitted, per D-078, and is
+worth watching on the next sweep.
+
+---
+
+**A defect found while verifying this, of the same class as D-094's.** The first adaptive
+recordings reported *"round 1 found no papers that earlier rounds hadn't already seen"* — the
+signature of D-075's semantic exit — when they had in fact stopped with a full prompt.
+`coverage._stop_reason` kept its own copy of the stopping rules and knew nothing about the new
+exits.
+
+That is the second time routing and reporting drifted (D-094 was the first, over `MAX_DEPTH`),
+and both produced a fluent, confident, wrong sentence in the panel a reader uses to judge a
+review. The rules now live in **`agent/exits.py`**, imported by `graph.py` (which routes on it)
+and `coverage.py` (which reports it), taking primitives so neither imports the other and the
+code-map's downward-imports rule still holds. `tests/agent/test_exits.py` pins the invariant:
+each exit fires on a state built for it, the router stops whenever any fires, and the panel
+names the one that actually did.
+
+**Cost of the finding:** two recording sweeps and one scoring sweep (~25 min).
+
 ## Open (proposed, not decided)
 
 **Settled 2026-09-20:** O-1 → D-064, O-2 → D-065, O-3 → D-066.
@@ -1618,7 +1692,12 @@ stay valid.
   paraphrase filter. The exit is not too weak; **the premise that a broad arXiv query runs out
   of new papers is false.** Closed as unbuildable as specified. What replaces it is O-14.
 
-- **O-14 — What should `MAX_DEPTH` default to, and should the exit be value-based?** Opened by
+- ~~**O-14 — What should `MAX_DEPTH` default to, and should the exit be value-based?**~~
+  **Settled 2026-09-21 → D-096.** Neither, as it turned out: the ceiling stays at 2 and the
+  exits became *adaptive*, which buys the same saving while keeping the reason visible and
+  the one thin question in twenty able to take a second round. The recommendation below to
+  lower `MAX_DEPTH` was **not** taken; the original text is kept because the reasoning that
+  led there is still the reasoning behind the rules that replaced it. Opened by
   D-094, which measured 1, 2 and 3 rounds and found no quality difference the harness can
   detect, at 2.8× the retrieval. Two questions, in order:
 
@@ -2069,4 +2148,4 @@ return nothing.
 | ~~O-11~~ | Evaluation harness | **Settled → D-088** | ~~before O-13~~ |
 | **O-12** | **In-band claim checker** | One node, one call; a product feature, not a thesis metric | After O-13 |
 | **O-13** | **Local-first corpus, BM25 first** | SQLite FTS5, no embedding model; sufficiency counted in distinct *papers*; dense retrieval demoted to a measured follow-on | Milestone 6 |
-| **O-14** | **`MAX_DEPTH` default + a yield-based exit** | Narrow set measured (D-095): depth fails there too. Recommend `MAX_DEPTH = 1` and an exit on empty searches — **awaiting your confirmation, it is `src/`** | Now |
+| ~~O-14~~ | ~~`MAX_DEPTH` default + a yield-based exit~~ | **Settled → D-096.** Adaptive exits instead of a lower ceiling: −66% searches, quality flat, 19/20 runs stop after one round | ~~Now~~ |
