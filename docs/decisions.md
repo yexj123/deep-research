@@ -1545,8 +1545,15 @@ stay valid.
      yes. The question that actually matters is "did this round change the *review*" — e.g.
      stop when a round contributes no paper that survives BM25 ranking into the top `N`
      (`rank_sources` already computes exactly this, and it is free and deterministic, so it
-     fits D-088's rule that the free exact measurement stays primary). Note this would have
-     fired often in the d2 arm: 81 papers retrieved, 20 in the prompt.
+     fits D-088's rule that the free exact measurement stays primary).
+
+     **This rule's firing rate is currently an estimate, not a measurement, and must not be
+     quoted as one.** The intuition is that with 81 papers retrieved and 20 reaching the
+     prompt, most of a later round is discarded — but a recording stores only the *final*
+     top 20, not which round each paper entered in, so nothing on disk can confirm it. Testing
+     it needs per-round paper ids in the recording and a re-record. D-094 exists precisely
+     because a plausible written estimate was wrong four times over (D-089); this one gets the
+     same treatment before it earns a decision number.
 
   **Not yet decided, and deliberately not applied:** lowering the default is a `src/` change
   resting on n=10 broad questions, and D-079's warning about drawing rates from thin data
