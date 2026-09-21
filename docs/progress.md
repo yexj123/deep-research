@@ -33,6 +33,12 @@ Backed by `CLAUDE.md`, the output style, and `Edit(/tests/**)`, `Edit(/docs/**)`
 - [ ] **Review D-096's `src/` changes** — `agent/exits.py` (new), plus the edits to `graph.py`,
       `coverage.py`, `state.py` and `decompose.py`. Written at your instruction rather than
       proposed, so it is the one part of `src/` you have not defended line by line yet
+- [ ] **O-8 / D-097 — write the nonce fence in `synthesize.py`.** Tests are written and
+      failing on the missing API (`new_fence`, `system_prompt`, `format_papers(..., fence=)`),
+      which is the documented cycle: walkthrough §2 steps 4 and 5
+- [ ] **Run `/demo-check` yourself** — Claude cannot invoke it. Milestone 5's last unticked
+      box, and D-096 changed what the coverage panel says, so the new sentence has never been
+      rendered in a browser
 - [ ] **`notebooks/`: measure ungrounded citations against depth** (D-079, Open) — the three
       depth arms now exist, so this is a re-score of recorded data rather than new runs
 

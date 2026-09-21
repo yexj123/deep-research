@@ -1638,6 +1638,47 @@ names the one that actually did.
 
 **Cost of the finding:** two recording sweeps and one scoring sweep (~25 min).
 
+### D-097 — A per-run nonce fence around the `<papers>` block (settles O-8's remaining half)
+
+**The hole.** `format_papers` wrapped untrusted arXiv text in a *fixed* `<papers>` delimiter.
+D-055 recorded the gap when the block was introduced: an abstract containing the literal
+closing tag ends the data block early, and everything after it reads to the model as though it
+came from the system prompt. Nothing about the resulting review looks wrong — which is the
+attack, and the same shape as every other bug this project has found.
+
+**Decision.** The delimiter carries a random per-run token from `secrets.token_hex(8)`:
+`<papers-a1b2c3d4e5f60718>` … `</papers-a1b2c3d4e5f60718>`, and the system prompt names that
+exact token. Untrusted text cannot forge it without guessing 16 hex characters.
+
+**Per run, not per process.** A process-wide constant would leak the moment one review quoted
+an abstract, unlocking every later run on the same server.
+
+**The payload is not scrubbed.** A paper whose abstract really contains `</papers>` is
+legitimate data and the model must see what it said. Stripping it would corrupt the evidence
+to defend the frame; the fence defends the frame without touching the data.
+
+**Rejected alternatives.** *Escaping the tag inside abstracts* — changes the text the model
+reads and silently alters `retrieval_context`, so every faithfulness score shifts. *Dropping
+the entry* — a D-021-shaped loss, invisible and unfalsifiable. *A JSON payload instead of
+tags* — genuinely unforgeable, but it rewrites the prompt format the citation rules and all 80
+recordings are built around, for a defence the nonce already provides.
+
+**What this does NOT fix, stated so the fence is not mistaken for a complete defence.** An
+abstract that writes "ignore your instructions" in plain prose is unaffected by any delimiter.
+That residual risk is carried by the prompt framing (D-055), by citations being validated
+against papers the run actually retrieved (D-046), and by the rendered review being escaped
+(D-085). **Prompt injection is mitigated here, not solved.**
+
+**Why now, before O-13.** A full paper is roughly 40x more attacker-controllable text than an
+abstract. Closing this after the corpus lands means closing it against a much larger surface.
+
+**Compatibility constraint that shaped the API.** `format_papers(sources)` with no fence keeps
+its exact current output, because `tests/eval/test_record.py` builds `retrieval_context` with
+it and all 80 committed recordings contain that text. Faithfulness is judged against it, so
+changing the unfenced form would quietly make new recordings incomparable to the baseline they
+exist to be compared against — a D-088 violation no test would otherwise catch. The recorder
+passes no fence deliberately, and `test_papers_fence.py` pins the unfenced string exactly.
+
 ## Open (proposed, not decided)
 
 **Settled 2026-09-20:** O-1 → D-064, O-2 → D-065, O-3 → D-066.
@@ -2142,7 +2183,7 @@ return nothing.
 | ~~O-5~~ | Failures visible | **Settled → D-086** | ~~M4~~ |
 | ~~O-6~~ | Frontend | **Settled → D-080** (htmx + a small EventSource) | ~~M5~~ |
 | ~~O-7~~ | Public entry function | **Settled** — `agent/runner.py` (D-081, D-084) | ~~M5~~ |
-| O-8 | Prompt injection | Nonce delimiter; output sanitizing at milestone 5 | Any time |
+| ~~O-8~~ | Prompt injection | **Settled → D-085 (XSS half) and D-097 (nonce fence).** Instruction-following injection remains mitigated, not solved | ~~Any time~~ |
 | O-9 | Accent spellings | Measure recall first, then decide | Any time |
 | O-10 | Non-English stopwords | Accept and document | Any time |
 | ~~O-11~~ | Evaluation harness | **Settled → D-088** | ~~before O-13~~ |
