@@ -1183,6 +1183,85 @@ confidently. One recording, one question, 39 seconds and a few cents replaced fo
 That is the argument for O-11 preceding O-13, and it is worth pointing at when asked why the
 evaluation harness came first.
 
+### D-090 — The ten-question baseline, and the four things it settles
+
+**Recorded and scored 2026-09-21.** Ten questions, `gpt-4o`, `max_depth=2`, `max_subtopics=3`,
+`retrieval_unit="abstract"`; judged by `gpt-4o-mini`. Raw data in `tests/eval/recordings/` and
+`tests/eval/results.json`.
+
+| | supplied | cited | used | stop |
+|---|---|---|---|---|
+| attention | 87 | 12 | 13.8% | depth |
+| diffusion | 88 | 6 | 6.8% | depth |
+| distillation | 89 | 8 | 9.0% | depth |
+| federated | 83 | 7 | 8.4% | depth |
+| gnn | 79 | 10 | 12.7% | depth |
+| long-context | 59 | 9 | 15.3% | depth |
+| moe | 85 | 7 | 8.2% | depth |
+| quantization | 83 | 10 | 12.0% | depth |
+| rag | 73 | 6 | 8.2% | depth |
+| speculative | 71 | 6 | 8.5% | depth |
+| **total** | **797** | **81** | **10.2%** | **10/10 depth** |
+
+Faithfulness **0.970 ± 0.041** (min 0.875), relevancy **0.990 ± 0.020** (min 0.950).
+
+---
+
+**1. The context waste is universal, and worse than the single sample showed.** 797 papers
+supplied, 81 cited — **10.2% used**, in a tight band of 6.8–15.3%. `attention` at 13.8% was
+one of the *better* cases. Roughly **262k tokens paid for and unused across ten runs**.
+
+The number that matters for a fix: **papers cited is 6–12, median 8, and does not scale with
+papers supplied.** A run given 89 papers cites 8; a run given 59 cites 9. So a top-N cut is
+not a tradeoff between cost and coverage — above roughly 20 papers the extra context buys
+nothing measurable. Proposed `SYNTHESIS_TOP_N ≈ 20–25`, leaving headroom over the observed
+maximum of 12 because BM25 ranking will not perfectly predict which papers the model cites.
+
+**2. The semantic exit never fires. `depth` is doing 100% of the work.** All ten runs stopped
+on the depth ceiling; not one converged. D-009 is explicit that `depth` is the backstop and
+the semantic rule is the mechanism — the reality is exactly inverted, so D-075's "did this
+round add a new paper?" is effectively dead code.
+
+**3. The cause is planner paraphrasing, and it makes finding 2 inevitable.** Two consecutive
+runs of the *same question with the same code* shared **2 of 9 subtopics** and **4 of 18
+cited papers**. The planner readily produces near-duplicates — run 1 explored "Multi-head
+attention in transformers", run 2 "Multi-head attention"; run 1 "Attention visualization in
+transformers", run 2 "Attention visualization techniques".
+
+`normalize_subtopic` is `casefold` + `strip` (D-017), so it catches none of these. Every round
+therefore proposes subtopics that look new, which retrieve papers that are new, which keeps
+the semantic exit from ever firing. **Findings 2 and 3 are one finding.**
+
+This also resurrects D-022. Its ≥60% paper-overlap rule existed precisely to catch a
+rephrased subtopic that returns papers already seen; D-074 deferred it and D-075 marked its
+control-flow use superseded. That was wrong — D-075's round-level rule cannot catch a
+*subtopic-level* duplicate, because a round containing one genuine subtopic and two paraphrases
+still adds new papers overall.
+
+**4. Run-to-run variance is large enough to invalidate N=1 comparisons.** 4 of 18 distinct
+cited papers shared between identical runs; review length differed by 12%. Any O-13 comparison
+drawing conclusions from one run per arm would be measuring sampling noise. Repeats are not
+optional for the thesis claim.
+
+---
+
+**Two numbers this produces for earlier open items:**
+
+- **Ungrounded citation rate: 1 in 81 citations, ~1.2%**, at `max_depth=2`. D-079 asked for a
+  rate and had two anecdotes; this is the first real measurement, though still at a single
+  depth setting.
+- **Planner JSON failure: 1 run in 10 died** with `ValidationError` on an unparseable plan,
+  and the same question succeeded on retry. A full-depth run makes up to four planner calls,
+  so a ~3% per-call failure rate implies roughly **11% of runs dying**. D-070 chose "crash the
+  run" with a note to revisit once `gap_check` could re-plan; that revisit now has evidence
+  behind it rather than a hypothetical.
+
+**The ceiling effect is confirmed across ten questions, not one.** Faithfulness 0.970 and
+relevancy 0.990 leave no room for O-13 to demonstrate improvement on either. A specificity
+metric is not a nice-to-have — without it the comparison **could not detect a difference even
+if one existed**, and the thesis would report "no measurable effect" from an instrument
+incapable of measuring it.
+
 ## Open (proposed, not decided)
 
 **Settled 2026-09-20:** O-1 → D-064, O-2 → D-065, O-3 → D-066.
@@ -1205,9 +1284,11 @@ stay valid.
   bought for nothing, and it is fixable without a corpus, embeddings or PDFs — rank the run's
   own papers against the question with BM25 and pass the top N. Proposed: reuse the FTS5
   machinery O-13 needs anyway, over a temporary in-memory index of just this run's papers, so
-  the ranking code is written once and serves both. Open: what N is, which O-11 can measure
-  directly by re-recording at several values. **Likely worth more than full text**, and far
-  cheaper to build.
+  the ranking code is written once and serves both. **Measured across ten questions (D-090): 10.2% of supplied papers are cited, and the cited
+  count is 6-12 regardless of how many are supplied.** So `SYNTHESIS_TOP_N` around 20-25 keeps
+  headroom over the observed maximum while cutting roughly three quarters of the prompt.
+  Build it as a switchable parameter, not a replacement, so both arms are reproducible from
+  one codebase. **Likely worth more than full text**, and far cheaper to build.
 
 - **The semantic exit is not firing.** D-075 stops a run when a round adds no paper the earlier
   rounds had not seen. Measured in D-089: the run ended on the **depth ceiling** instead, having
@@ -1216,8 +1297,15 @@ stay valid.
   papers, so the rule is too weak to fire. Proposed alternatives, none decided: require a
   *minimum number* of new papers rather than one; compare new papers against those actually
   *cited* rather than merely retrieved; or accept that broad questions legitimately run to depth
-  and say so in the coverage report. Worth settling before `max_depth` is tuned, since tuning a
-  ceiling that is doing all the work is tuning the wrong thing.
+  and say so in the coverage report. **Measured across ten questions (D-090): 10 of 10 runs stopped on the depth ceiling; not one
+  converged.** And the cause is now known — the planner paraphrases, two identical runs shared
+  only 2 of 9 subtopics, and `normalize_subtopic` (casefold + strip) catches none of
+  "Multi-head attention in transformers" vs "Multi-head attention". So every round looks new,
+  retrieves new papers, and the exit never fires. **This resurrects D-022:** its subtopic-level
+  paper-overlap rule is exactly what catches a rephrased subtopic, and D-075's round-level rule
+  provably cannot, since a round with one real subtopic and two paraphrases still adds papers.
+  Settle before `max_depth` is tuned — tuning a ceiling that is doing all the work is tuning
+  the wrong thing.
 
 - **Evaluation needs a depth metric, not only faithfulness.** D-089 measured faithfulness 0.944
   and relevancy 1.000 on the abstract-only baseline, which leaves almost no headroom for O-13 to

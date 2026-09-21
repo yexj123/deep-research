@@ -344,6 +344,28 @@ The graph compiles, the provider arrives through runtime context, tokens stream 
 
 ---
 
+## Baseline recorded (2026-09-21)
+
+Ten questions, `gpt-4o`, abstracts only. Raw data in `tests/eval/recordings/`, scores in
+`tests/eval/results.json`. Full analysis in D-090; the headline numbers:
+
+| | |
+|---|---|
+| Papers supplied / cited | **797 / 81 — 10.2% used** |
+| Cited per run | 6-12, median 8, **independent of how many were supplied** |
+| Runs stopping on the depth ceiling | **10 of 10** |
+| Faithfulness / relevancy | 0.970 ± 0.041 / 0.990 ± 0.020 |
+| Ungrounded citations | 1 in 81 (~1.2%) |
+| Planner JSON failures | 1 run in 10 died; succeeded on retry |
+
+**What it changes.** Context pruning moves ahead of the corpus work: ~262k tokens were paid
+for and unused across ten runs, and since the cited count doesn't scale with supply, a top-N
+cut costs nothing measurable. The semantic exit is revealed as dead code — `depth` does 100%
+of the work, inverting D-009 — and the cause is planner paraphrasing that
+`normalize_subtopic` cannot catch, which resurrects D-022. And run-to-run variance is large
+enough (4 of 18 cited papers shared between identical runs) that any O-13 comparison needs
+repeats, not one run per arm.
+
 ## Next: measure before building (O-11 → O-13)
 
 Designed 2026-09-21, not started. The sequencing is the point: **O-11 first**, because

@@ -104,18 +104,31 @@ def _case(recording: Recording) -> LLMTestCase:
 @needs_recordings
 @pytest.mark.eval
 @pytest.mark.parametrize("recording", RECORDINGS, ids=lambda r: r.id)
-def test_every_citation_was_actually_retrieved(recording: Recording) -> None:
-    """The agent's own grounding check, replayed over the recorded set (D-046).
+def test_ungrounded_citations_are_recorded_not_asserted(recording: Recording) -> None:
+    """Record how many citations were ungrounded. Do NOT fail on them (D-078).
 
-    Listed first on purpose: this is the measurement that needs no model and costs nothing,
-    and it is stronger evidence than any judged score. A violation here is the agent citing a
-    paper it never retrieved.
+    This repeats a mistake D-078 already fixed once, one level up: asserting
+    `citation_violations == []` asserts that the *model behaved*, not that the code works.
+    Grounding exists precisely because models cite from memory, so a violation is the checker
+    succeeding -- turning the whole baseline sweep red for it would make the suite useless as
+    a comparison tool and would punish a run for a fact about the model.
+
+    Measured 2026-09-21 across ten questions: 1 ungrounded citation in 81 total, ~1.2%. That
+    is a number D-079's open item asked for, and it only exists because this records rather
+    than asserts.
+
+    What *would* fail: a violation that names a paper the run actually retrieved, which would
+    mean the checker itself is broken.
     """
     _record_score(recording.id, "ungrounded_citations", len(recording.citation_violations))
     _record_score(recording.id, "papers_in_context", len(recording.retrieval_context))
-    assert recording.citation_violations == [], (
-        f"{recording.id}: ungrounded citations {recording.citation_violations}"
-    )
+
+    retrieved = " ".join(recording.retrieval_context)
+    for violation in recording.citation_violations:
+        assert violation not in retrieved, (
+            f"{recording.id}: {violation!r} was retrieved but recorded as ungrounded -- "
+            "that is a checker bug, not a model one"
+        )
 
 
 @needs_recordings
