@@ -140,7 +140,8 @@ conversation.
 
 ## Commands
 
-- Backend run: **TODO** (once `api/main.py` exists: `uv run uvicorn deep_research.api.main:app --reload`)
+- Backend run: `uv run uvicorn deep_research.api.main:create_app --factory --reload`
+  (`create_app` is a factory, not a module-level `app`, so tests can inject fakes — D-032)
 - Test: `uv run pytest`
 - Frontend: **TODO**
 

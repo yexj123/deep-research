@@ -910,11 +910,117 @@ and what was rejected. It's the answer to "why did you do it this way?"
 - **Consequence:** `citation_violations` is **data**, not an assertion (D-078) — which is what
   D-046 designed it to be. See Open → "Measure hallucination rate against recursion depth".
 
+### D-080 — Frontend: htmx, plus a small `EventSource` for the review pane (settles O-6)
+- **Decision:** server-rendered Jinja2 templates in `api/`, htmx for the page, the form, run
+  history and the node-progress trail. The token stream is handled by ~20 lines of vanilla JS
+  using `EventSource` directly, buffering text and re-rendering markdown with a small library.
+  No `frontend/` directory, no build step, no `node_modules`.
+- **Why the earlier "htmx, no JavaScript" framing was wrong** (verified 2026-09-21 against the
+  current docs): the SSE extension is `htmx-ext-sse@2.2.4`, separate from htmx 2.0.x core, and its
+  documented attributes are `sse-connect`, `sse-swap`, `hx-trigger="sse:<name>"` and `sse-close`.
+  The docs show **no example combining `sse-swap` with `hx-swap`**, so appending streamed tokens
+  is undocumented. Within pure htmx the alternative is replace-semantics — re-swapping the whole
+  review block on every token, hundreds of times for a 500-word review.
+- **And JavaScript was always required anyway:** htmx swaps HTML; the review is markdown
+  accumulating token by token. Either the server re-renders the accumulated review on every chunk,
+  or the client does. "No JS" was never achievable for this feature, and claiming it was an
+  advantage of htmx was wrong.
+- **Why still htmx for the rest:** the node-progress trail *is* a natural `sse-swap` target — one
+  event per finished node, replacing a progress element, which is exactly what the extension
+  documents. Run history and the question form are ordinary form posts. Each tool does what it is
+  actually good at.
+- **Rejected:** SvelteKit — a component model genuinely handles accumulating tokens and
+  re-rendering markdown better, and it is closer to Open WebUI's real shape, but it costs a second
+  toolchain, a build step and a deploy story for a project whose contribution is the agent.
+  Also rejected: dropping token streaming entirely, which would discard the `messages` stream that
+  D-016 chose LangChain chat models for and D-037's integration test exists to prove.
+
+### D-081 — The run lifecycle: `POST` creates, `GET` streams, resumes or replays
+- **Decision:** `POST /runs` records the question and provider and returns a `thread_id` without
+  executing anything. `GET /runs/{thread_id}/stream` drives the run and decides from the
+  checkpoint which of three states it is in:
+
+  | Snapshot | Meaning | Action |
+  |---|---|---|
+  | `created_at is None` | never started | `astream({"question": ...})` |
+  | `next` non-empty | interrupted mid-run | `astream(None)` — resume |
+  | `created_at` set, `next == ()` | finished | replay the saved review, **do not re-run** |
+
+- **Why no background task registry:** verified 2026-09-21 — abandoning a stream mid-run (closing
+  the async generator, which is what FastAPI does on client disconnect) leaves a checkpoint whose
+  `next` is `('research_worker', 'research_worker')`, and `astream(None, config)` resumes from
+  exactly there through to completion. **The pending `Send` fan-out survives**, which is D-071
+  paying off. A dropped browser connection therefore costs at most the in-flight node, not the run.
+- **Why the third state matters:** a completed run also has `next == ()`, so `next` alone cannot
+  distinguish "finished" from "never started". Without the `created_at` check, a browser
+  reconnecting to a finished run would re-execute the whole graph and re-bill the account.
+- **Rejected:** running the graph inside `POST /runs` as a background task with the stream route
+  following it. It needs a task registry, and "follow a graph another coroutine is running" is not
+  something `astream` offers — it would mean a pub/sub layer or polling checkpoints. Resume gives
+  the same disconnect-safety with no new machinery.
+
+### D-082 — `AsyncSqliteSaver` is constructed by hand, never via `from_conn_string`
+- **Decision:** the app builds its checkpointer as
+  `AsyncSqliteSaver(conn, serde=build_serializer())` over an `aiosqlite.connect(...)` connection
+  opened in the FastAPI lifespan, and calls `await checkpointer.setup()` once.
+- **Why not `from_conn_string`:** verified 2026-09-21 — its signature is
+  `from_conn_string(conn_string)` with **no `serde` parameter**; its body is `cls(conn)`. Using it
+  silently discards the allowlist from `build_serializer()`, which is the one thing D-014 exists to
+  enforce. The convenience method quietly bypasses the safety decision.
+- **What actually happens without the allowlist** (measured, both paths, through a real SQLite
+  file and a *fresh connection*): `Source` still restores correctly **today**, but with
+  `Deserializing unregistered type ... This will be blocked in a future version`. So it is not a
+  break now — it is a break later, announced only by a log line that is easy to miss on a server.
+  That matches D-014's correction exactly.
+- **Also confirmed:** `setup()` exists and must be called (it creates the tables), and
+  `seen_paper_ids` round-trips as a real `set` through SQLite, not just through `InMemorySaver`
+  (D-067).
+
+### D-083 — SSE is hand-rolled with `StreamingResponse`
+- **Decision:** the stream endpoint is an async generator yielding
+  `event: <type>\ndata: <json>\n\n`, returned as
+  `StreamingResponse(..., media_type="text/event-stream")`. No `sse-starlette`.
+- **Why:** it is roughly fifteen lines, and the framing is the part a judge is most likely to ask
+  about. CLAUDE.md's standing requirement is that every line be defensible; adding a dependency to
+  hide the format works against that. Disconnect handling needs no library either — the generator
+  is closed, and D-081 showed that leaves a resumable checkpoint.
+- **Rejected:** `sse-starlette`, which handles framing, keepalive pings and disconnect detection.
+  Genuinely fiddly parts, and worth revisiting if keepalive turns out to matter behind a proxy —
+  but not worth a dependency for a localhost single-user app (D-008).
+
+### D-084 — `citations_checked` is the completion signal (revises D-081)
+- **Decision:** `ResearchState` gains `citations_checked: bool = False`, written only by
+  `check_citations`, the terminal node. `get_run_state` returns `FINISHED` when it is true, and
+  `INTERRUPTED` otherwise. `next` is not consulted at all.
+- **Why D-081's discriminator was wrong.** It used `next == ()` to mean finished. Measured
+  2026-09-21, breaking a stream immediately after `decompose` and closing the generator:
+
+  | `stream_mode` | resulting `next` |
+  |---|---|
+  | `["updates"]` | `('research_worker', 'research_worker')` |
+  | `["updates", "messages"]` | `()` |
+  | `["updates", "custom", "messages"]` (production) | `()` |
+
+  So an interrupted run and a finished run are indistinguishable by `next` — and the production
+  stream modes are precisely the case that produces the ambiguous value. Under D-081 as written,
+  a browser reconnecting after a mid-run disconnect would have been told the run was finished and
+  handed an empty review.
+- **Why `review` alone is not enough either:** `check_citations` runs *after* `synthesize`, so a
+  run interrupted between them has a review and an empty `citation_violations`. Treating that as
+  finished would report "no ungrounded citations" for a review that was never checked — D-062's
+  failure shape reached by a different route. Only a field the terminal node writes can mean
+  "this run completed".
+- **Confirmed:** resume works regardless of `next`. `astream(None, config)` on a `next == ()`
+  interrupted checkpoint re-ran `decompose` and continued to completion, with 2 arXiv requests
+  rather than 4 — so a step-boundary interruption costs re-running the last node, which is what
+  D-081 claimed. The resumability story survives; only the state detection was wrong.
+- **Cost:** one bool in state. No reducer (single writer), no allowlist entry (a builtin).
+
 ## Open (proposed, not decided)
 
 **Settled 2026-09-20:** O-1 → D-064, O-2 → D-065, O-3 → D-066.
-**Settled 2026-09-21:** O-4 → D-077. The remaining numbering is unchanged so earlier references
-stay valid.
+**Settled 2026-09-21:** O-4 → D-077, O-6 → D-080, O-7 → `agent/runner.py` (see D-081). The
+remaining numbering is unchanged so earlier references stay valid.
 
 - **Measure hallucination rate against recursion depth (`notebooks/`).** D-079 records one
   observation in each direction; a rate needs N runs per depth on the same questions, counting
@@ -965,39 +1071,10 @@ apology, and it is the kind of honesty an advisor rewards.
 
 ---
 
-### Needed for milestone 5 (web layer)
+### Milestone 5 — all settled 2026-09-21
 
-#### O-6 — Frontend: SvelteKit or htmx
-
-**Problem.** The app is fundamentally "stream text into a page, show node progress, list saved
-reviews". Both stacks can do it.
-
-| Option | Pros | Cons |
-|---|---|---|
-| **htmx** (no `frontend/`; templates live in `api/`) | No second toolchain, no build step, no `node_modules`, nothing to deploy separately. SSE maps directly onto the existing design (D-006). Far less surface to defend | Streaming *markdown* is the hard part and still needs a JS library, so "no JavaScript" is not quite true. Run history and re-render logic get awkward as state grows |
-| **SvelteKit** (a real `frontend/`) | A proper component model for token-by-token rendering and run history. A more polished demo | A whole second toolchain, build step and deploy story for a project whose thesis value is entirely in the agent. More code you must be able to defend |
-| **Server-rendered HTML + a small vanilla JS `EventSource`** | Smallest possible dependency set; the SSE client is ~20 lines you fully understand | You hand-roll what a framework gives free; grows into a bad framework if the UI expands |
-
-**Recommendation: htmx, and verify the SSE story before committing.** The deciding argument is
-that every hour on the frontend is an hour not spent on recursion and citation grounding, which is
-what the thesis is actually about. **Verify first** (do not take this from memory): that htmx's SSE
-extension can append streamed tokens into a live-rendering markdown block, since that is the one
-requirement that could rule it out.
-
-#### O-7 — A public entry function
-
-**Problem.** `intake` validates the run context (D-033), but every caller still assembles
-`RunContext` and the config dict by hand.
-
-| Option | Pros | Cons |
-|---|---|---|
-| **A. A `run_research(question, provider, thread_id)` wrapper** owning context, config and stream modes | One place to get it right; the API route stays thin; the signature documents what a run needs | Another layer to keep in sync with the graph; tests that want raw `astream` bypass it anyway |
-| **B. Status quo — rely on `intake`** | Nothing to build; the graph stays the only interface | The web layer will rebuild the same context in at least two routes (start and resume), so the duplication is guaranteed rather than hypothetical |
-
-**Recommendation: A at milestone 5, not before.** Its real shape only becomes clear once the routes
-exist, and writing it now means guessing at the signature.
-
----
+O-6 → **D-080** (htmx + a small EventSource) · O-7 → **`agent/runner.py`**, whose shape came out
+of D-081 and D-084. Nothing open blocks the web layer.
 
 ### Ongoing / not milestone-gated
 
@@ -1065,8 +1142,8 @@ return nothing.
 | ~~O-3~~ | Models per role | **Settled → D-066** | ~~M3~~ |
 | ~~O-4~~ | `recursion_limit` | **Settled → D-077** (15, measured minimum 13) | ~~M4~~ |
 | O-5 | Failures visible | State first, `custom` events later; add a limitations section | Milestone 4 |
-| O-6 | Frontend | htmx — but verify its SSE + streaming-markdown story first | Milestone 5 |
-| O-7 | Public entry function | Build it at milestone 5, once the routes exist | Milestone 5 |
+| ~~O-6~~ | Frontend | **Settled → D-080** (htmx + a small EventSource) | ~~M5~~ |
+| ~~O-7~~ | Public entry function | **Settled** — `agent/runner.py` (D-081, D-084) | ~~M5~~ |
 | O-8 | Prompt injection | Nonce delimiter; output sanitizing at milestone 5 | Any time |
 | O-9 | Accent spellings | Measure recall first, then decide | Any time |
 | O-10 | Non-English stopwords | Accept and document | Any time |

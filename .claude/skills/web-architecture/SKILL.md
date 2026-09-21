@@ -19,7 +19,7 @@ task queue before you've tried it. This project uses `version="v2"`
 ```python
 async for chunk in graph.astream(
     {"question": question},
-    config={"configurable": {"thread_id": thread_id}, "recursion_limit": 150},
+    config={"configurable": {"thread_id": thread_id}, "recursion_limit": RECURSION_LIMIT},
     context=RunContext(provider=provider),   # per-run provider (D-015)
     stream_mode=["updates", "custom", "messages"],
     version="v2",
@@ -55,28 +55,49 @@ agent" controls) — not needed for v1.
 `AsyncSqliteSaver` (package `langgraph-checkpoint-sqlite`, import from
 `langgraph.checkpoint.sqlite.aio`) gives the graph resumable runs keyed by
 `thread_id`, and the same SQLite file can hold your saved-review history —
-don't stand up a second database until there's a real reason to. Set
-`LANGGRAPH_STRICT_MSGPACK=true` (or pass an explicit
-`allowed_msgpack_modules`) when constructing the checkpointer — it restricts
-what a checkpoint can deserialize into, which matters once this file is
-something other people run from a cloned repo.
+don't stand up a second database until there's a real reason to.
 
-## Frontend — decide this together, don't default silently
+**Never use `AsyncSqliteSaver.from_conn_string()` here (D-082).** Verified
+2026-09-21: it takes no `serde` argument and its body is `cls(conn)`, so it
+silently discards the allowlist from `build_serializer()` — the one thing
+D-014 exists to enforce. Build it by hand instead, and call `setup()` once:
 
-Two real options, genuinely different tradeoffs:
+```python
+async with aiosqlite.connect(db_path) as conn:
+    checkpointer = AsyncSqliteSaver(conn, serde=build_serializer())
+    await checkpointer.setup()
+```
 
-- **Match Open WebUI's shape (SvelteKit SPA + REST/SSE)**: closer to the
-  thing you're modeling this on, but a second toolchain, a build step, and
-  time spent on frontend plumbing instead of the agent.
-- **Server-rendered (FastAPI + Jinja2 + htmx, SSE wired straight into a
-  swapped DOM fragment)**: one language, one process, live-updating UI
-  without a JS framework — the pragmatic default under a real deadline,
-  with less to point to if "matching Open WebUI's feel" is itself part of
-  the point.
+Without the allowlist a `Source` still restores **today**, but logs
+`Deserializing unregistered type ... will be blocked in a future version`.
+It's not a break now; it's a break later, announced by a line that's easy to
+miss in server logs.
 
-Pick based on how much of the remaining time you want to spend on frontend
-versus the agent — there's no wrong answer, just say which and I'll reason
-from there instead of assuming.
+**Resumability is real and worth designing around (D-081).** Closing the
+stream mid-run — what FastAPI does when the browser goes away — leaves a
+checkpoint whose `next` names the pending nodes, and `astream(None, config)`
+continues from there. The pending `Send` fan-out survives too. So a dropped
+connection costs the in-flight node, not the run, and no background task
+registry is needed.
+
+## Frontend — decided (D-080): htmx, plus a small EventSource
+
+Server-rendered Jinja2 in `api/`, htmx for the page, form, run history and
+the node-progress trail. **The token stream is NOT htmx.** Verified
+2026-09-21: the SSE extension (`htmx-ext-sse`, separate from core) documents
+`sse-connect`, `sse-swap`, `hx-trigger="sse:<name>"` and `sse-close`, and
+shows **no example combining `sse-swap` with `hx-swap`** — appending streamed
+tokens is undocumented. Pure htmx would mean re-swapping the whole review
+block per token.
+
+And JS was always required regardless: htmx swaps HTML, the review is
+markdown accumulating token by token, so something must re-render it. "htmx
+means no JavaScript" is false for this app — don't repeat it.
+
+So: `updates` → `sse-swap` on a progress element (exactly what the extension
+documents); `messages` → ~20 lines of vanilla `EventSource` that buffers text
+and re-renders markdown. SvelteKit was rejected as a second toolchain for a
+project whose contribution is the agent.
 
 ## Auth — don't build it yet
 

@@ -59,4 +59,6 @@ def check_citations(state: ResearchState) -> dict[str, Any]:
             seen.add(entry)
             violations.append(entry)
 
-    return {"citation_violations": violations}
+    # citations_checked is the terminal marker: an empty citation_violations means "checked,
+    # found none" only once this is True (D-084).
+    return {"citation_violations": violations, "citations_checked": True}

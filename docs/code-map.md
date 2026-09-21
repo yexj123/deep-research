@@ -4,7 +4,8 @@ What each file does, what it uses, and what uses it. Built from the actual impor
 2026-09-21. Design reasons are in [`decisions.md`](decisions.md) (the `D-` numbers).
 
 **Status tags**
-- **[M4]**: new in milestone 4
+- **[M5]**: new in milestone 5 (the web layer)
+- **[M4]**: added in milestone 4
 - **[M3]**: added in milestone 3
 - **[M1]**: implemented and tested (milestone 1)
 - **[M2]**: added in milestone 2
@@ -18,7 +19,13 @@ search, one per subtopic and with a catch list.
 ## 1. The big picture: four layers
 
 ```text
-  callers          tests/  (later also api/, the web layer)
+  web              api/main.py (create_app + lifespan) · api/routes/runs.py [M5]
+                     │ owns the dependencies for the process, formats SSE
+                     ▼
+  entry point      agent/runner.py [M5]  (stream_run: start / resume / replay)
+                     │
+                     ▼
+  callers          tests/  · api/
                      │ build the dependencies and call build_graph(...)
                      ▼
   wiring           agent/graph.py
@@ -277,6 +284,45 @@ recorded verbatim. So a citation it can't read is never mistaken for a verified 
 is reported rather than accepted (D-046, D-062).
 **Registered by:** `graph.py`, as `"check_citations"`.
 
+### `agent/runner.py` [M5]
+**Defines:** `RunState` (NOT_STARTED / INTERRUPTED / FINISHED), `get_run_state`, `stream_run`,
+`get_review`, `STREAM_MODES`.
+**Why it exists (settles O-7):** everything a caller must get right lives here rather than in a
+route — the run context (D-033), `recursion_limit` (D-077), the stream modes, and the
+start/resume/replay decision (D-081). In the agent package, not `api/`, so the decision is
+testable without HTTP and usable from a script.
+**The trap it encodes:** `next == ()` does **not** mean finished — an interrupted run has an empty
+`next` too under the production stream modes. `citations_checked`, written only by the terminal
+node, is the reliable signal (D-084).
+**Used by:** `api/routes/runs.py`, `tests/agent/test_runner.py`.
+
+### `api/main.py` [M5]
+**Defines:** `create_app(...)` and the `lifespan` context manager. `DEFAULT_DB_PATH`.
+**Owns the four graph dependencies for the process** (D-032, D-049, D-064). They are built in the
+lifespan, not at import: the HTTP client and SQLite connection are context managers, and the rate
+limiter's semaphore binds to the first event loop that touches it.
+**Why a factory, not a module-level `app`:** tests inject a fake model factory, an
+`httpx.MockTransport` client and a zero-delay limiter without monkeypatching. Run it with
+`uvicorn deep_research.api.main:create_app --factory`.
+
+### `api/routes/runs.py` [M5]
+**Defines:** `CreateRun` / `RunCreated` (Pydantic at the boundary, D-013), `_sse`, `_event_for`,
+and the four routes: `POST /runs`, `GET /runs`, `GET /runs/{id}`, `GET /runs/{id}/stream`.
+**`_event_for` is deliberately not a passthrough:** raw `updates` chunks carry `Source` objects,
+which are not JSON-serializable, and the browser has no use for full state. It emits `node`,
+`progress`, `token` and `done` events instead — and filters `messages` to `synthesize`, or the
+planner's JSON reaches the user's review pane (D-080).
+**SSE is hand-rolled** (D-083): `event: <type>
+data: <json>
+
+` in a `StreamingResponse`.
+
+### `persistence/runs.py` [M5]
+**Defines:** `Run`, `init_runs_table`, `record_run`, `get_run`, `list_runs`.
+**Why:** a checkpoint holds a run's *state*, but nothing records a run before it has executed a
+node — and `POST /runs` returns a thread_id without running anything (D-081). Same SQLite file as
+the checkpoints (D-007).
+
 ### `agent/graph.py` [M1 → M4]
 **Defines:** `build_graph(model_factory, http_client, limiter, checkpointer)` (D-032, D-049, D-064),
 `route_subtopics(state)` and `route_after_gap_check(state)`. Wiring: START → `intake` →
@@ -322,7 +368,11 @@ searchability filter, D-073), `test_arxiv.py`.
 
 `search_arxiv` receives its `client` as a parameter and never creates one (D-049).
 
-### `persistence/checkpointer.py` [M2]
+### `persistence/checkpointer.py` [M2 → M5]
+**Milestone 5 added** `open_checkpointer(db_path)`: builds `AsyncSqliteSaver(conn, serde=...)` by
+hand and calls `setup()`. **Never `from_conn_string()`** — it takes no `serde`, so it silently
+discards the allowlist that D-014 exists to enforce (D-082).
+
 **Defines:** `ALLOWED_MSGPACK_MODULES` (the custom state types as `(module, class)` pairs, built from
 each class, D-057) and `build_serializer()`, which turns on strict mode.
 **Uses:** `JsonPlusSerializer` from LangGraph, `sources/models.Source`.
@@ -353,6 +403,8 @@ Claude writes and maintains every file here (since 2026-09-19; see `CLAUDE.md`).
 | `agent/test_reducers.py` [M3] | The merge reducers as pure functions: dedup keys, first-seen order, and that neither mutates its left argument (D-067) | `state.py` reducers, `make_source` |
 | `agent/test_decompose.py` [M3] | The planner's three hard filters, JSON validation, and `route_subtopics`' empty-plan guard (D-069, D-070, D-073) | `make_decompose`, `route_subtopics`, `fakes` |
 | `agent/test_research_worker.py` [M3] | The worker called directly: success contract, the 429/5xx-vs-4xx split, and that a failure never marks a subtopic explored (D-065, D-072) | `make_research_worker`, `fakes` |
+| `api/test_runs.py` [M5] | The routes over `httpx.ASGITransport`: create, list, stream, replay, 404s, and that every streamed event is JSON-serializable (D-081, D-083) | `create_app`, `fakes` |
+| `agent/test_runner.py` [M5] | start / resume / replay as a unit. Here rather than in `api/` because ASGITransport drives the response generator to completion, so an HTTP-level disconnect test would pass without exercising anything (D-084) | `stream_run`, `get_run_state` |
 | `agent/test_gap_check.py` [M4] | The stopping rule as a pure function: depth accounting, and the two exits (D-075, D-076) | `gap_check`, `route_after_gap_check` |
 | `agent/test_recursion.py` [M4] | The whole cycle: a full-depth run fits RECURSION_LIMIT, 12 is one step too few, and each early exit (D-009, D-077) | `build_graph`, `make_arxiv_feed` |
 | `agent/test_fanout.py` [M3] | The whole graph fanning out: one worker per subtopic, reducers under parallel writes, partial failure, and which nodes stream (D-067, D-068, D-069) | `build_graph`, `fakes` |

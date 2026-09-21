@@ -63,3 +63,9 @@ class ResearchState:
     # reset one.
     seen_before_round: int = 0
     citation_violations: list[str] = field(default_factory=list)
+    # Written only by check_citations, the terminal node, so it is the one reliable "this run
+    # completed" signal (D-084). `next == ()` is not: a run interrupted at a step boundary
+    # also has an empty `next`, and `review` alone would call a run finished that stopped
+    # between synthesize and check_citations -- reporting zero citation violations without
+    # ever having checked. Single writer, so no reducer.
+    citations_checked: bool = False

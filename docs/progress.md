@@ -3,7 +3,7 @@
 What's done, what's next, and whose job each item is. Design reasoning
 lives in [`decisions.md`](decisions.md); this file only tracks status.
 
-**Last updated:** 2026-09-21 · **Current milestone:** 4 (`gap_check` + depth recursion)
+**Last updated:** 2026-09-21 · **Current milestone:** 5 (web layer: FastAPI + SSE + SQLite)
 
 **Who writes what:** you write the implementation (`src/`); Claude writes every test
 (since 2026-09-19) and keeps the docs (since 2026-09-20) — `docs/*.md` and the README.
@@ -24,6 +24,41 @@ Backed by `CLAUDE.md`, the output style, and `Edit(/tests/**)`, `Edit(/docs/**)`
       D-075; retire it, or keep the ratio as thesis evidence (see Open)
 - [ ] **`notebooks/`: measure ungrounded citations against depth** (D-079, Open) — needed before
       tuning `MAX_DEPTH` or `MAX_SUBTOPICS`, or those numbers are guesses
+
+## Milestone 5: web layer (backend)
+
+**Goal:** the agent reachable over HTTP — start a run, stream it to a browser, read it back —
+on a real SQLite checkpoint file.
+
+**Status (2026-09-21):** backend complete, not committed. `uv run pytest`:
+**168 passed, 1 deselected** (up from 148). Decisions: D-080 – D-084, settling O-6 and O-7.
+
+**Done:**
+- [x] Dependencies: `fastapi`, `uvicorn[standard]`, `langgraph-checkpoint-sqlite`, `jinja2` —
+      plus **`httpx` as an explicit dependency**, which `src/` has imported all along while only
+      arriving transitively via `langchain-openai`
+- [x] `persistence/checkpointer.py`: `open_checkpointer()` (D-082)
+- [x] `persistence/runs.py`: the runs table, same SQLite file as the checkpoints (D-007)
+- [x] `agent/runner.py`: `stream_run`, `get_run_state`, `get_review` — settles O-7 (D-081, D-084)
+- [x] `api/main.py`: `create_app()` + lifespan owning all four graph dependencies
+- [x] `api/routes/runs.py`: POST /runs, GET /runs, GET /runs/{id}, GET /runs/{id}/stream (D-083)
+- [x] `state.py`: `citations_checked`, the terminal completion marker (D-084)
+- [x] `tests/api/` (13) over `httpx.ASGITransport`; `tests/agent/test_runner.py` (6)
+
+**Next:**
+- [ ] Frontend: Jinja2 templates + htmx + the `EventSource` review pane (D-080)
+- [ ] Run it for real: `uv run uvicorn deep_research.api.main:create_app --factory --reload`
+- [ ] Commit, then record the hash here
+
+**Three things measured while building this:**
+- **`AsyncSqliteSaver.from_conn_string()` takes no `serde`** — using it silently discards the
+  D-014 allowlist. Not a break today; a break later, announced only by a log line (D-082).
+- **`next == ()` does not mean "finished"** — with the production stream modes, an interrupted
+  run has an empty `next` too. D-081's discriminator was wrong; D-084 replaced it with a
+  terminal marker. Resume itself works regardless.
+- **A disconnect cannot be tested through `httpx.ASGITransport`** — it drives the response
+  generator to completion regardless of the client breaking out. A test written there passed
+  without exercising anything, so resume coverage lives in `test_runner.py` instead.
 
 ## Milestone 4: `gap_check` + depth recursion
 
