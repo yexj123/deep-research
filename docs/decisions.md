@@ -1251,70 +1251,162 @@ against than a 200-word abstract does, so it will work better once full text exi
   one thing here that genuinely cannot be checked deterministically — that is what justifies a
   model doing it.
 
-#### O-13 — A full-text corpus with embedded retrieval
+#### O-13 — Milestone 6: a local-first corpus with online fallback
 
-**Problem.** Reviews are written from abstracts. An abstract is an author-written summary and
-is genuinely well-suited to "what does the field say" — but it carries no method detail, no
-numbers, and no limitations section.
+**The shape.** A personal corpus that grows from the research you actually do. A subtopic is
+answered from local papers when the corpus already covers it, and arXiv is consulted only when
+it doesn't — with anything newly fetched indexed on the way through.
 
-**The reframe that matters:** "download PDFs" and "RAG" are separate decisions. The real
-question is the *retrieval unit* — abstract → full text → chunks. Full text can go straight
-into context without any retrieval layer; RAG is what you reach for when the corpus exceeds
-the context window.
+```
+subtopic
+  ├─ embed (query prefix)  →  sqlite-vec kNN over the corpus
+  │
+  ├─ corpus covers it?  ──yes──►  use corpus papers, no network
+  │
+  └───────────────────── no ───►  arXiv search
+                                    ├─ index every result's abstract (free, no download)
+                                    ├─ fetch full text for the top few only
+                                    └─ use corpus hits ∪ new results
+```
 
-**Measured cost per synthesis (approximate, 10 papers):**
+**Refinement 1: the fallback decision is per *subtopic*, inside the worker — not per run.**
+The obvious reading of "when a query comes in, check the corpus first" puts the check at the
+top of the run, which bypasses `decompose` entirely. Putting it in `research_worker` instead
+means the graph is unchanged, each subtopic decides independently, and a single run can answer
+two subtopics from the corpus while fetching for a third. Strictly better, and it needs no new
+node — `research_worker` gains a branch.
 
-| Approach | Prompt tokens |
-|---|---|
-| Abstracts (today) | ~2.5k |
-| Full text in context, no retrieval | ~80k |
-| Chunk retrieval | ~10k |
+**Refinement 2: on fallback, augment rather than replace.** Corpus hits that scored below the
+sufficiency bar are still real papers. Use them *and* the new results.
 
-So retrieval is ~8× cheaper than stuffing full text and ~4× more than abstracts. Embedding is
-a negligible one-off: ~90 papers ≈ 720k tokens ≈ **$0.015** on a hosted small model, or free
-with a local one. **The persistent-corpus argument is the strong one** — a corpus amortizes
-across runs, which matches how a researcher actually works over months on one field.
+---
 
-**Confirmed 2026-09-21:** `sqlite-vec` **is already installed**, arriving transitively with
-`langgraph-checkpoint-sqlite`, and vector search works. Vectors can live in the *same* SQLite
-file as the checkpoints and run history, which follows D-007 rather than fighting it. No new
-service, no separate vector database.
+##### The two-tier corpus (what makes the cold start bearable)
 
-**Legal position** (arXiv API terms of use, re-read 2026-09-21): storing and **serving** arXiv
-PDFs from your servers is prohibited, and users should be directed to arXiv for downloads. But
-*"if you build indexes or tools based on the full-text, you must link back to arXiv"* — index
-building is explicitly contemplated. A gitignored local cache on a single-user localhost app
-(D-008) is on the right side of that line and matches D-003. **The constraint this creates:**
-if this is ever deployed for other people, the PDF cache has to go. Decide that now, not after
-building on the assumption it can stay.
+Downloading PDFs for every search result is not viable: up to 10 results per subtopic at
+3 s each (D-064 applies to downloads too) is ~30 s per subtopic and ~90 s per round, before
+a word is written. So the corpus has two tiers:
 
-**The questions to settle before writing code:**
+| Tier | What's indexed | When | Cost |
+|---|---|---|---|
+| **Abstracts** | Every paper any search ever returned | Always, automatically | Free — already retrieved, no download |
+| **Full text** | Selected papers only | On demand: papers the review cited, or an explicit request | 3 s + extraction each |
 
-1. **Which papers get downloaded?** Up to 90 candidates per run at 3 s each (D-064 applies to
-   downloads too) is 4½ minutes before anything is written. Needs a selection rule — top-N by
-   relevance, or "not already in the corpus". This decides whether the feature feels good or
-   broken more than the retrieval quality does.
-2. **Does the review draw from the corpus or from this run's papers?** Drawing from the corpus
-   surfaces papers from earlier runs, which is a real feature — but it breaks D-086's coverage
-   statement. "This run explored X" becomes "the corpus holds Y, this run added Z", which is a
-   different and more honest sentence that has to be designed rather than patched.
-3. **Local or hosted embeddings?** D-022 rejected embeddings partly because *"every run would
-   depend on an embeddings API even when chat uses DeepSeek"*. A local ONNX model removes that
-   objection entirely and makes the corpus work offline; it costs a dependency and a model
-   download.
-4. **Chunking.** Scientific PDFs are two-column with equations, tables and references.
-   Section-aware chunking beats fixed-size but is harder; references and boilerplate should
-   probably be dropped entirely.
-5. **Injection surface.** D-055 treats abstracts as untrusted, and O-8's `</papers>` delimiter
-   gap is still open. A full paper is ~40× more attacker-controllable text than an abstract.
-   O-8's nonce delimiter should land **before** this, not after.
+This is what "hierarchical" can usefully mean here. It also fixes the cold start: **every
+arXiv search seeds the abstract tier**, so the corpus has value from the first run rather than
+after a deliberate bulk-download phase. Full text deepens it over time, where depth was
+actually needed.
 
-**Recommendation:** build it as its own milestone with local embeddings and `sqlite-vec`, with
-every chunk carrying its `arxiv_id` — which leaves `check_citations` working unchanged, since
-the citation format is per-paper. **Keep the abstract-only path working as a switchable
-baseline.** "Abstracts vs full-text retrieval: citation accuracy and claim support" is a real
-thesis result, and it can only be reported if both paths exist. It also de-risks the work: if
-retrieval quality disappoints, a working system has not been destroyed to find that out.
+It also keeps today's behaviour as the floor. An abstract-tier-only corpus produces exactly
+what the system produces now — which is what makes D-088's `retrieval_unit` recordings a fair
+comparison rather than a change of two variables at once.
+
+---
+
+##### The sufficiency test, and why similarity is the wrong metric
+
+This is the whole design, and it is harder than a threshold.
+
+**Cosine similarity does not measure coverage.** Three problems, and the third is fatal for
+this use case:
+
+1. It isn't calibrated — 0.8 means different things for different models and different text.
+2. It isn't comparable across queries — a narrow subtopic scores higher than a broad one for
+   reasons that have nothing to do with whether the corpus is adequate.
+3. **Ten near-identical chunks score beautifully while the field has two hundred papers.**
+   A QA system can answer from one good passage. A *literature review* cannot: breadth is the
+   product. High similarity with narrow coverage is exactly the failure this would hide.
+
+**Proposed test: count distinct papers, not chunks.** A subtopic is covered locally when at
+least `MIN_LOCAL_PAPERS` *distinct* papers have a chunk above `LOCAL_SCORE_FLOOR`. Counting
+papers makes the test about breadth; counting chunks makes it about redundancy. This mirrors
+D-028, which already requires ≥3 results before the paper-overlap rule means anything.
+
+**Both numbers must be measured, not guessed** — and O-11 is now the thing that measures them.
+Vary `MIN_LOCAL_PAPERS`, re-record, compare faithfulness and citation accuracy against the
+abstract-only baseline. Picking them by intuition would be the `recursion_limit = 150` mistake
+again (D-077).
+
+---
+
+##### Staleness is a correctness problem, not a performance one
+
+arXiv grows by roughly 100 GB a month. A corpus that answered a subtopic well in March is
+missing April's key paper, and **local-first will serve that silently**. That is this
+project's recurring failure shape — D-062, D-063, D-069, O-5 — arriving in a new place:
+success reported for less work than the reader assumes.
+
+The fix is not to defeat the cache. It is to **say so**. D-086's coverage section gains:
+
+> *Answered 2 of 3 subtopics from the local corpus (7 papers, indexed between 2026-03-04 and
+> 2026-08-21). No new arXiv search was performed for those subtopics.*
+
+Then the reader decides whether that's acceptable, which is the same principle as reporting
+why a run stopped rather than only that it stopped.
+
+Open sub-question: whether a time-based rule should force a refresh (e.g. re-search if the
+newest corpus paper for this subtopic is older than N days). Reporting is the minimum;
+a refresh policy is a decision on top of it.
+
+---
+
+##### Schema — one SQLite file, as D-007 already decided
+
+`sqlite-vec` is already installed and working (confirmed 2026-09-21, arriving transitively
+with `langgraph-checkpoint-sqlite`). Vectors live beside the checkpoints and the runs table:
+
+```sql
+papers (arxiv_id PK, title, authors, summary, published, url, indexed_at, has_full_text)
+chunks (id PK, arxiv_id FK, tier, section, text)
+vec_chunks USING vec0(embedding float[384])   -- rowid joins chunks.id
+```
+
+`tier` distinguishes abstract chunks from full-text chunks, which is what lets a retrieval be
+restricted to the abstract tier for a fair comparison against today's baseline.
+
+---
+
+##### The embedding gotcha, confirmed rather than assumed
+
+fastembed's default is `BAAI/bge-small-en-v1.5` (384-dim, 22M params), and it is an
+**asymmetric** model: queries and passages require different prefixes. Embedding a subtopic
+the same way as a passage degrades retrieval **silently** — no error, just worse results.
+fastembed exposes `query_embed()` separately from `embed()` for exactly this reason, and the
+two must not be mixed up. Worth a test that pins it, since nothing else would catch it.
+
+Local rather than hosted embeddings settles D-022's objection directly: *"every run would
+depend on an embeddings API even when chat uses DeepSeek."* Local also means the corpus works
+offline, which is the point of local-first.
+
+---
+
+##### Legal position (re-read 2026-09-21)
+
+arXiv prohibits **storing and serving** e-prints from your servers, and asks that users be
+directed to arXiv for downloads. But *"if you build indexes or tools based on the full-text,
+you must link back to arXiv"* — index building is explicitly contemplated. A gitignored local
+cache on a single-user localhost app (D-008) is on the right side of that line and matches
+D-003.
+
+**The constraint this creates, to accept now rather than discover later:** if this is ever
+deployed for other people, the full-text cache has to go. The abstract tier is unaffected —
+arXiv metadata may be stored and shared (D-042).
+
+---
+
+##### What is still genuinely open
+
+1. **`MIN_LOCAL_PAPERS` and `LOCAL_SCORE_FLOOR`** — measure with O-11, don't guess.
+2. **Full-text fetch trigger.** Papers the review cited? A user action? Both?
+3. **Staleness policy** — report only, or force a refresh after N days?
+4. **Chunking.** Scientific PDFs are two-column with equations, tables and references;
+   section-aware chunking beats fixed-size but is harder, and references should be dropped.
+5. **Corpus scope in coverage reporting.** "This run explored X" becomes "the corpus holds Y,
+   this run added Z" — a better sentence, but one D-086 has to be redesigned around rather
+   than patched.
+
+**Sequenced before this:** O-8's nonce delimiter. A full paper is ~40× more
+attacker-controllable text than an abstract, so close the `</papers>` gap first.
 
 ### Ongoing / not milestone-gated
 
@@ -1389,4 +1481,4 @@ return nothing.
 | O-10 | Non-English stopwords | Accept and document | Any time |
 | ~~O-11~~ | Evaluation harness | **Settled → D-088** | ~~before O-13~~ |
 | **O-12** | **In-band claim checker** | One node, one call; a product feature, not a thesis metric | After O-13 |
-| **O-13** | **Full-text corpus + retrieval** | Local embeddings in the existing SQLite file; keep abstracts as a switchable baseline | Milestone 6 |
+| **O-13** | **Local-first corpus, online fallback** | Two tiers (abstracts always, full text selectively); sufficiency counted in distinct *papers*, not chunk scores | Milestone 6 |

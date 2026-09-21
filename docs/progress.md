@@ -260,7 +260,7 @@ outcome above. Kept here as the record of what wasn't yours:
 | 4 | `gap_check` + depth recursion, retry cap, paper overlap | **O-4** `recursion_limit` value · **O-5** making failures visible |
 | 5 | Web layer: FastAPI + SSE + `AsyncSqliteSaver` | **Done, `ac20b98`** (D-080 – D-087) |
 | 6 | **Evaluation harness** — a baseline before anything changes | **O-11** framework + a frozen question set |
-| 7 | **Full-text corpus + retrieval** | **O-13** which papers to fetch · corpus-vs-run scope · local embeddings |
+| 7 | **Local-first corpus, online fallback** | **O-13** sufficiency thresholds (measure with O-11) · full-text fetch trigger · staleness policy |
 | 8 | **In-band claim checker** | **O-12** — after 7, since chunks give it tighter context |
 
 Every open item now carries options, tradeoffs and a recommendation in
@@ -371,3 +371,35 @@ deployed for others** — a constraint to accept now rather than discover later.
 
 **Sequenced before O-13:** O-8's nonce delimiter. A full paper is roughly 40× more
 attacker-controllable text than an abstract, so the `</papers>` gap should close first.
+
+### Milestone 6 shape (O-13, designed 2026-09-21)
+
+A corpus that grows from the research actually done. Each **subtopic** — not each run — checks
+the local corpus first and falls back to arXiv only when the corpus doesn't cover it, indexing
+anything new on the way through. Putting the branch in `research_worker` rather than at the top
+of the run keeps `decompose` intact and lets one run answer two subtopics locally while
+fetching for a third.
+
+**Two tiers, which is what makes the cold start bearable.** Abstracts are indexed for every
+paper any search returns — free, since they're already retrieved. Full text is fetched only
+for selected papers. Downloading a PDF for every result would be ~30 s per subtopic before a
+word is written; this way the corpus has value from the first run, and today's
+abstract-only behaviour remains the floor for comparison.
+
+**The sufficiency test is the whole design, and similarity is the wrong metric for it.** Cosine
+scores aren't calibrated, aren't comparable across queries, and — fatally — ten near-identical
+chunks score beautifully while the field holds two hundred papers. A QA system can answer from
+one good passage; a literature review cannot, because breadth *is* the product. So sufficiency
+counts **distinct papers above a floor**, not chunk scores, mirroring D-028's ≥3-results rule.
+Both thresholds get measured with O-11 rather than guessed — picking them by intuition would
+be the `recursion_limit = 150` mistake again.
+
+**Staleness is a correctness problem.** arXiv grows ~100 GB/month, so a corpus that answered
+well in March silently misses April's key paper. The fix isn't to defeat the cache, it's to
+report it: D-086's coverage gains "answered N of M subtopics from the corpus, indexed between
+X and Y, no new search performed." Same principle as reporting *why* a run stopped.
+
+**Confirmed, not assumed:** `sqlite-vec` is already installed and working, so vectors live in
+the existing SQLite file (D-007). fastembed's default `bge-small-en-v1.5` is **asymmetric** —
+queries and passages need different prefixes, and mixing them degrades retrieval with no
+error, so it needs a test that pins it.
