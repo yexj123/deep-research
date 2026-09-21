@@ -1251,15 +1251,15 @@ against than a 200-word abstract does, so it will work better once full text exi
   one thing here that genuinely cannot be checked deterministically — that is what justifies a
   model doing it.
 
-#### O-13 — Milestone 6: a local-first corpus with online fallback
+#### O-13 — Milestone 6: a local-first corpus, BM25 first
 
-**The shape.** A personal corpus that grows from the research you actually do. A subtopic is
-answered from local papers when the corpus already covers it, and arXiv is consulted only when
-it doesn't — with anything newly fetched indexed on the way through.
+**The shape.** A personal corpus that grows from the research actually done. Each *subtopic*
+is answered from local papers when the corpus covers it, and arXiv is consulted only when it
+doesn't — with anything newly fetched indexed on the way through.
 
 ```
 subtopic
-  ├─ embed (query prefix)  →  sqlite-vec kNN over the corpus
+  ├─ sanitize into terms  →  FTS5 MATCH over the corpus, ranked by bm25()
   │
   ├─ corpus covers it?  ──yes──►  use corpus papers, no network
   │
@@ -1269,144 +1269,190 @@ subtopic
                                     └─ use corpus hits ∪ new results
 ```
 
-**Refinement 1: the fallback decision is per *subtopic*, inside the worker — not per run.**
-The obvious reading of "when a query comes in, check the corpus first" puts the check at the
-top of the run, which bypasses `decompose` entirely. Putting it in `research_worker` instead
-means the graph is unchanged, each subtopic decides independently, and a single run can answer
-two subtopics from the corpus while fetching for a third. Strictly better, and it needs no new
-node — `research_worker` gains a branch.
+**Per subtopic, inside `research_worker` — not per run.** Checking the corpus at the top of a
+run would bypass `decompose` entirely. In the worker it needs no new node, and a single run
+can answer two subtopics locally while fetching for a third.
 
-**Refinement 2: on fallback, augment rather than replace.** Corpus hits that scored below the
-sufficiency bar are still real papers. Use them *and* the new results.
+**On fallback, augment rather than replace.** Corpus hits below the bar are still real papers.
 
 ---
 
-##### The two-tier corpus (what makes the cold start bearable)
+##### Why BM25 rather than embeddings, and why that order
 
-Downloading PDFs for every search result is not viable: up to 10 results per subtopic at
-3 s each (D-064 applies to downloads too) is ~30 s per subtopic and ~90 s per round, before
-a word is written. So the corpus has two tiers:
+**Decided: SQLite FTS5 with `bm25()` ranking, no embedding model.** Dense retrieval is demoted
+to a *measured follow-on*, and hybrid fusion (RRF) to a decision after that.
 
-| Tier | What's indexed | When | Cost |
+1. **Exact jargon is what academic search runs on.** Verified 2026-09-21: `'mamba'` and
+   `'FlashAttention'` rank their papers correctly under BM25. A 384-dim, 22M-parameter model
+   blurs precisely these tokens, and literature search is full of them — *LoRA*, *Chinchilla*,
+   *RWKV*, author names, method names.
+2. **Zero dependencies.** FTS5 is compiled into the bundled SQLite (confirmed: 3.49.1, FTS5
+   present). No fastembed, no ONNX runtime, no ~130 MB model download, and the asymmetric
+   query/passage prefix trap never enters the critical path.
+3. **It mirrors arXiv's own retrieval semantics** — the strongest argument. `build_search_query`
+   already extracts keywords and arXiv matches lexically. If the local tier matches lexically
+   too, then *"the corpus doesn't cover this"* means something consistent. With embeddings
+   locally and keywords remotely, a local miss might mean only that **two retrieval methods
+   disagreed**, and the sufficiency test would be measuring that disagreement rather than
+   coverage.
+4. **It is debuggable.** You can see which terms matched. A cosine score cannot tell you that.
+
+**A reasoning error worth recording:** `sqlite-vec` was recommended partly *because it was
+already installed*. Installed is not the same as warranted, and convenience stood in for
+justification until the BM25 option was raised.
+
+**Where dense retrieval genuinely wins**, and therefore what the follow-on experiment tests:
+paraphrase and synonymy (*"attention mechanism"* vs *"scaled dot-product attention"*), and
+long full-text chunks where the relevant passage never repeats the query terms. Both are real;
+neither is obviously load-bearing for short, keyword-dense abstracts. Build BM25, measure with
+O-11, and add vectors only if the numbers justify them — the same method that put the eval
+harness before the corpus work.
+
+---
+
+##### LOCKED: `bm25()` score directionality
+
+SQLite's `bm25()` returns the **negative** of the standard BM25 score, so that plain
+`ORDER BY bm25(t)` sorts best-first. Measured 2026-09-21 on a 30-document corpus:
+
+| term | docs matched | top `bm25()` |
+|---|---|---|
+| `attention` | 3 / 30 | **−1.820** |
+| `proteins` | 5 / 30 | −1.355 |
+| `model` | 25 / 30 | **−0.000** |
+
+**Rules, to stop this being inverted silently:**
+
+- **`ORDER BY bm25(table)` ascending is best-first.** Adding `DESC` returns the *worst*
+  matches, with no error and plausible-looking output.
+- **Convert at the boundary.** The retrieval function returns `relevance = -bm25(...)`, so
+  every caller and every threshold above it is "higher is better". Negative scores must not
+  escape the module that queries FTS5.
+- **Absolute score thresholds are unusable** — and this is the substantive finding, not a
+  style point. A term in more than half the corpus gets degenerate IDF and scores collapse
+  toward zero **regardless of match quality**. The same query therefore scores differently on
+  a cold corpus than a mature one, and differently for common versus rare jargon. Any
+  `relevance > X` sufficiency rule would drift as the corpus grows, in a direction nobody
+  would notice.
+
+**Therefore sufficiency counts distinct papers, not scores.** A subtopic is covered locally
+when at least `MIN_LOCAL_PAPERS` *distinct* papers appear in the top-k FTS5 results. Counting
+papers measures breadth; counting chunks measures redundancy; thresholding scores measures
+corpus size. This mirrors D-028, which already requires ≥3 results before the paper-overlap
+rule means anything. `MIN_LOCAL_PAPERS` and `k` get **measured with O-11**, not guessed —
+choosing them by intuition would be `recursion_limit = 150` again (D-077).
+
+---
+
+##### LOCKED: query sanitization, shared with the arXiv path
+
+FTS5 has its own query language, so an unsanitized subtopic is an injection risk — not
+theoretical: `'"unterminated'` raises `sqlite3.OperationalError: unterminated string`,
+crashing the query outright (measured 2026-09-21).
+
+**Refactor:** one extraction step, two formatters.
+
+```
+subtopic ──► search_terms()  ──┬──► build_search_query(terms)  →  all:a AND all:b   (arXiv)
+             (clean + strip    └──► build_fts_query(terms)     →  a b               (FTS5)
+              stopwords, lower)
+```
+
+`search_terms` is today's `build_search_query` cleaning, lifted out unchanged: strip
+`PUNCTUATION_PATTERN`, drop stopwords, lowercase (D-051, D-059, D-063).
+
+**Two properties that make this safe, both verified:**
+
+- **Punctuation stripping removes every symbolic FTS5 operator** — `"` `*` `(` `)` `:` `^` —
+  which is what prevents the `OperationalError` above and blocks `column:` filters. The same
+  pattern already protects the arXiv path (D-051), so one fix serves both backends.
+- **Lowercasing is a security property here, not just normalization.** FTS5's word operators
+  are case-sensitive: `'attention AND transformer'` matched 2 documents as an operator, while
+  `'attention and transformer'` matched 0 — it became an ordinary search term. So lowercasing
+  neutralizes `AND`, `OR`, `NOT` and `NEAR`. **This must be commented and tested**, because
+  someone "improving" the code by preserving the planner's capitalization would silently
+  reintroduce operator injection with nothing failing.
+
+`or`, `not` and `near` are not in `STOPWORDS` (`and` is), so they survive as harmless
+barewords that add a non-matching term to the implicit AND. Worth adding to the stopword list
+for that reason alone.
+
+---
+
+##### The two tiers (what makes the cold start bearable)
+
+Downloading a PDF per search result is ~30 s per subtopic and ~90 s per round before a word is
+written (D-064 applies to downloads too). So:
+
+| Tier | Indexed | When | Cost |
 |---|---|---|---|
-| **Abstracts** | Every paper any search ever returned | Always, automatically | Free — already retrieved, no download |
-| **Full text** | Selected papers only | On demand: papers the review cited, or an explicit request | 3 s + extraction each |
+| **Abstracts** | Every paper any search returns | Always, automatically | Free — already retrieved |
+| **Full text** | Selected papers only | Papers the review cited, or on request | 3 s + extraction each |
 
-This is what "hierarchical" can usefully mean here. It also fixes the cold start: **every
-arXiv search seeds the abstract tier**, so the corpus has value from the first run rather than
-after a deliberate bulk-download phase. Full text deepens it over time, where depth was
-actually needed.
-
-It also keeps today's behaviour as the floor. An abstract-tier-only corpus produces exactly
-what the system produces now — which is what makes D-088's `retrieval_unit` recordings a fair
-comparison rather than a change of two variables at once.
-
----
-
-##### The sufficiency test, and why similarity is the wrong metric
-
-This is the whole design, and it is harder than a threshold.
-
-**Cosine similarity does not measure coverage.** Three problems, and the third is fatal for
-this use case:
-
-1. It isn't calibrated — 0.8 means different things for different models and different text.
-2. It isn't comparable across queries — a narrow subtopic scores higher than a broad one for
-   reasons that have nothing to do with whether the corpus is adequate.
-3. **Ten near-identical chunks score beautifully while the field has two hundred papers.**
-   A QA system can answer from one good passage. A *literature review* cannot: breadth is the
-   product. High similarity with narrow coverage is exactly the failure this would hide.
-
-**Proposed test: count distinct papers, not chunks.** A subtopic is covered locally when at
-least `MIN_LOCAL_PAPERS` *distinct* papers have a chunk above `LOCAL_SCORE_FLOOR`. Counting
-papers makes the test about breadth; counting chunks makes it about redundancy. This mirrors
-D-028, which already requires ≥3 results before the paper-overlap rule means anything.
-
-**Both numbers must be measured, not guessed** — and O-11 is now the thing that measures them.
-Vary `MIN_LOCAL_PAPERS`, re-record, compare faithfulness and citation accuracy against the
-abstract-only baseline. Picking them by intuition would be the `recursion_limit = 150` mistake
-again (D-077).
+Every arXiv search seeds the abstract tier, so the corpus is useful from the first run rather
+than after a bulk-download phase. It also keeps today's behaviour as the comparison floor,
+which is what makes D-088's `retrieval_unit` recordings a fair test rather than two variables
+changing at once.
 
 ---
 
 ##### Staleness is a correctness problem, not a performance one
 
-arXiv grows by roughly 100 GB a month. A corpus that answered a subtopic well in March is
-missing April's key paper, and **local-first will serve that silently**. That is this
-project's recurring failure shape — D-062, D-063, D-069, O-5 — arriving in a new place:
-success reported for less work than the reader assumes.
+arXiv grows ~100 GB/month, so a corpus that answered a subtopic well in March **silently**
+misses April's key paper. That is this project's recurring failure shape arriving somewhere
+new (D-062, D-063, D-069, O-5).
 
-The fix is not to defeat the cache. It is to **say so**. D-086's coverage section gains:
+The fix is not to defeat the cache but to say so. D-086's coverage section gains:
 
 > *Answered 2 of 3 subtopics from the local corpus (7 papers, indexed between 2026-03-04 and
 > 2026-08-21). No new arXiv search was performed for those subtopics.*
 
-Then the reader decides whether that's acceptable, which is the same principle as reporting
-why a run stopped rather than only that it stopped.
-
-Open sub-question: whether a time-based rule should force a refresh (e.g. re-search if the
-newest corpus paper for this subtopic is older than N days). Reporting is the minimum;
-a refresh policy is a decision on top of it.
+Open sub-question: whether a time rule should force a refresh, or whether reporting is enough.
 
 ---
 
 ##### Schema — one SQLite file, as D-007 already decided
 
-`sqlite-vec` is already installed and working (confirmed 2026-09-21, arriving transitively
-with `langgraph-checkpoint-sqlite`). Vectors live beside the checkpoints and the runs table:
-
 ```sql
 papers (arxiv_id PK, title, authors, summary, published, url, indexed_at, has_full_text)
-chunks (id PK, arxiv_id FK, tier, section, text)
-vec_chunks USING vec0(embedding float[384])   -- rowid joins chunks.id
+chunks (id PK, arxiv_id, tier, section, text)          -- tier: 'abstract' | 'full_text'
+chunks_fts USING fts5(text, content='chunks', content_rowid='id',
+                      tokenize='porter unicode61')      -- external-content index
 ```
 
-`tier` distinguishes abstract chunks from full-text chunks, which is what lets a retrieval be
-restricted to the abstract tier for a fair comparison against today's baseline.
-
----
-
-##### The embedding gotcha, confirmed rather than assumed
-
-fastembed's default is `BAAI/bge-small-en-v1.5` (384-dim, 22M params), and it is an
-**asymmetric** model: queries and passages require different prefixes. Embedding a subtopic
-the same way as a passage degrades retrieval **silently** — no error, just worse results.
-fastembed exposes `query_embed()` separately from `embed()` for exactly this reason, and the
-two must not be mixed up. Worth a test that pins it, since nothing else would catch it.
-
-Local rather than hosted embeddings settles D-022's objection directly: *"every run would
-depend on an embeddings API even when chat uses DeepSeek."* Local also means the corpus works
-offline, which is the point of local-first.
+`tokenize='porter unicode61'` keeps non-ASCII terms working, consistent with D-063. `tier`
+lets retrieval be restricted to abstracts for a fair comparison against today's baseline.
+No vector table until the follow-on experiment justifies one.
 
 ---
 
 ##### Legal position (re-read 2026-09-21)
 
-arXiv prohibits **storing and serving** e-prints from your servers, and asks that users be
-directed to arXiv for downloads. But *"if you build indexes or tools based on the full-text,
-you must link back to arXiv"* — index building is explicitly contemplated. A gitignored local
-cache on a single-user localhost app (D-008) is on the right side of that line and matches
-D-003.
+arXiv prohibits **storing and serving** e-prints from your servers and asks that users be
+directed to arXiv for downloads — but *"if you build indexes or tools based on the full-text,
+you must link back to arXiv"*, so index building is explicitly contemplated. A gitignored
+local cache on a single-user localhost app (D-008) is on the right side of that line and
+matches D-003.
 
-**The constraint this creates, to accept now rather than discover later:** if this is ever
-deployed for other people, the full-text cache has to go. The abstract tier is unaffected —
-arXiv metadata may be stored and shared (D-042).
+**The constraint to accept now:** if this is ever deployed for other people, the full-text
+cache has to go. The abstract tier is unaffected — arXiv metadata may be stored and shared
+(D-042).
 
 ---
 
 ##### What is still genuinely open
 
-1. **`MIN_LOCAL_PAPERS` and `LOCAL_SCORE_FLOOR`** — measure with O-11, don't guess.
+1. **`MIN_LOCAL_PAPERS` and `k`** — measure with O-11, don't guess.
 2. **Full-text fetch trigger.** Papers the review cited? A user action? Both?
 3. **Staleness policy** — report only, or force a refresh after N days?
-4. **Chunking.** Scientific PDFs are two-column with equations, tables and references;
-   section-aware chunking beats fixed-size but is harder, and references should be dropped.
+4. **Chunking** for the full-text tier: section-aware beats fixed-size but is harder, and
+   references should be dropped entirely.
 5. **Corpus scope in coverage reporting.** "This run explored X" becomes "the corpus holds Y,
-   this run added Z" — a better sentence, but one D-086 has to be redesigned around rather
-   than patched.
+   this run added Z" — better, but D-086 has to be redesigned around it rather than patched.
+6. **Dense retrieval as a follow-on**, then RRF hybrid if the measurement supports it.
 
 **Sequenced before this:** O-8's nonce delimiter. A full paper is ~40× more
-attacker-controllable text than an abstract, so close the `</papers>` gap first.
+attacker-controllable text than an abstract.
 
 ### Ongoing / not milestone-gated
 
@@ -1481,4 +1527,4 @@ return nothing.
 | O-10 | Non-English stopwords | Accept and document | Any time |
 | ~~O-11~~ | Evaluation harness | **Settled → D-088** | ~~before O-13~~ |
 | **O-12** | **In-band claim checker** | One node, one call; a product feature, not a thesis metric | After O-13 |
-| **O-13** | **Local-first corpus, online fallback** | Two tiers (abstracts always, full text selectively); sufficiency counted in distinct *papers*, not chunk scores | Milestone 6 |
+| **O-13** | **Local-first corpus, BM25 first** | SQLite FTS5, no embedding model; sufficiency counted in distinct *papers*; dense retrieval demoted to a measured follow-on | Milestone 6 |

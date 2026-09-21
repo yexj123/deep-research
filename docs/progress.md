@@ -260,7 +260,7 @@ outcome above. Kept here as the record of what wasn't yours:
 | 4 | `gap_check` + depth recursion, retry cap, paper overlap | **O-4** `recursion_limit` value · **O-5** making failures visible |
 | 5 | Web layer: FastAPI + SSE + `AsyncSqliteSaver` | **Done, `ac20b98`** (D-080 – D-087) |
 | 6 | **Evaluation harness** — a baseline before anything changes | **O-11** framework + a frozen question set |
-| 7 | **Local-first corpus, online fallback** | **O-13** sufficiency thresholds (measure with O-11) · full-text fetch trigger · staleness policy |
+| 7 | **Local-first corpus (BM25/FTS5)** | **O-13**  (measure with O-11) · full-text fetch trigger · staleness policy |
 | 8 | **In-band claim checker** | **O-12** — after 7, since chunks give it tighter context |
 
 Every open item now carries options, tradeoffs and a recommendation in
