@@ -24,7 +24,7 @@ Backed by `CLAUDE.md`, the output style, and `Edit(/tests/**)`, `Edit(/docs/**)`
       D-075; retire it, or keep the ratio as thesis evidence (see Open). **D-094 narrows this:**
       as a *novelty* signal it provably cannot fire, so the only live question is whether the
       ratio is worth keeping as evidence
-- [x] **Measured quality against depth** (D-094) — d0/d1/d2 recorded and scored; no detectable
+- [x] **Measured quality against depth** (D-094, `cf936f0`) — d0/d1/d2 recorded and scored; no detectable
       difference, so `MAX_DEPTH` is *not* being tuned on this data (O-14 says why)
 - [ ] **O-14, step 1: a narrow-question set at d0 vs d2.** The frozen ten are all broad survey
       prompts — the case least likely to need decomposition. This is the experiment that
