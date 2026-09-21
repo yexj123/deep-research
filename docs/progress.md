@@ -28,7 +28,7 @@ Backed by `CLAUDE.md`, the output style, and `Edit(/tests/**)`, `Edit(/docs/**)`
       difference, so `MAX_DEPTH` is *not* being tuned on this data (O-14 says why)
 - [x] **O-14, step 1: a narrow-question set at d0 vs d2** (D-095, `e326202`) — recorded and
       scored; depth fails on intersection questions too, and fails hardest there
-- [x] **O-14 settled → D-096 (`pending`)** — adaptive exits instead of a lower `MAX_DEPTH`:
+- [x] **O-14 settled → D-096 (`ac1b37c`, measured in `8e267b6`)** — adaptive exits instead of a lower `MAX_DEPTH`:
       −66% arXiv searches, quality flat, 19/20 runs stop after one round. `MAX_DEPTH` stays 2
 - [ ] **Review D-096's `src/` changes** — `agent/exits.py` (new), plus the edits to `graph.py`,
       `coverage.py`, `state.py` and `decompose.py`. Written at your instruction rather than
