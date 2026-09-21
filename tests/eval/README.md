@@ -9,6 +9,43 @@ uv run pytest -m eval     # score those saved results with an LLM judge
 
 Neither runs on `uv run pytest`. Both cost money.
 
+## Arms
+
+An **arm** is one configuration, and it is the unit everything else is keyed to. The directory
+name under `recordings/` is *derived* from the recording's own `settings`
+(`recording.arm_name`), never passed in, so a run physically cannot be filed under a
+configuration that did not produce it:
+
+```
+{question_set}-{retrieval_unit}-{all|topN}-d{max_depth}
+broad-abstract-top20-d2      narrow-abstract-top20-d0
+```
+
+Two environment variables select an arm; everything else comes from `config.py`:
+
+```sh
+EVAL_MAX_DEPTH=0 uv run pytest -m record                        # one round instead of three
+EVAL_QUESTION_SET=narrow uv run pytest -m record                # O-14's intersection questions
+EVAL_QUESTION_SET=narrow EVAL_MAX_DEPTH=0 uv run pytest -m record
+```
+
+`EVAL_MAX_DEPTH` patches `MAX_DEPTH` in **every** module that imported it — `graph.py` decides
+routing, `coverage.py` decides what the recording *says* about why the run stopped. Patching
+only the first produced twenty recordings that claimed they had converged when they had hit
+their ceiling (D-094). `test_recordings_are_consistent.py` now asserts that invariant on the
+committed JSON for free.
+
+## Comparing two arms
+
+```sh
+uv run python -m tests.eval.compare broad-abstract-top20-d0 broad-abstract-top20-d2
+```
+
+Paired per question — the arms answer the same questions, so the mean of the per-question
+*differences* is the statistic, not the difference of the means. Question difficulty varies
+far more than the effects being measured, so an unpaired comparison would drown them.
+Run it with no arguments to list the available arms.
+
 ## Why record and score are separate
 
 Same reason `tests/agent/fixtures/arxiv/` holds saved arXiv responses: **capture real output
@@ -53,8 +90,19 @@ adjacent subtopics while every individual claim stays perfectly supported.
 
 ## Rules that keep the numbers meaningful
 
-**`questions.json` is append-only.** Add questions; never reword one. A reworded question
-silently invalidates every recording that used it, and you will not notice.
+**Question sets are append-only.** Add questions; never reword one. A reworded question
+silently invalidates every recording that used it, and you will not notice. There are two,
+kept in separate files so that adding one cannot touch the other:
+
+- `questions.json` — ten broad, single-area survey prompts ("what is attention?").
+- `questions-narrow.json` — ten intersection questions spanning two or three of the same
+  areas ("how does speculative decoding interact with quantization?"). These exist because
+  D-094 found no benefit from recursion on the broad set, and broad survey prompts are the
+  case *least* likely to need decomposition — so the null result had to be retested on the
+  case that should favour it (O-14).
+
+Ids must be unique across both sets, since `results.json` is keyed arm → question id.
+`test_question_sets.py` enforces all of this for free.
 
 **The judge model is pinned** (`gpt-4o-mini`) and printed in every assertion message. A
 different judge gives different numbers, so an unrecorded judge makes two runs incomparable —

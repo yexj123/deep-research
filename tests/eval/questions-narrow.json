@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "set": "narrow",
+  "note": "Frozen evaluation set, append-only on the same terms as questions.json: add questions, never reword one, because a reworded question silently invalidates every earlier recording that used it (D-088).",
+  "why": "D-094 measured max_depth 0 vs 1 vs 2 on the broad set and found no quality difference at 2.8x the retrieval. But every question in that set is a single-area survey prompt ('what is attention?'), which is the case least likely to need decomposition -- so the null result may be a property of the questions, not of recursion. These questions are built to be the opposite: each one is an INTERSECTION of two or three areas that the broad set covers separately, so a single arXiv query cannot cover it and a planner that decomposes well should win. Deliberately drawn from the same subject areas as questions.json, so a difference cannot be explained away as 'arXiv has fewer papers on these topics'.",
+  "falsifies": "If depth shows no gain here either, recursive decomposition is decoration on this workload and the thesis should say so (O-14).",
+  "questions": [
+    { "id": "spec-quant",      "question": "How does speculative decoding interact with post-training quantization when both are applied to the same model?" },
+    { "id": "rag-longctx",     "question": "When is retrieval-augmented generation better than simply using a longer context window, and when is it worse?" },
+    { "id": "moe-latency",     "question": "What are the tradeoffs between mixture-of-experts routing and expert parallelism for inference latency?" },
+    { "id": "distill-tokenizer", "question": "How does knowledge distillation work when the teacher and student models use different tokenizers?" },
+    { "id": "fed-privacy",     "question": "How does federated learning handle non-IID client data when differential privacy is also applied?" },
+    { "id": "gnn-transformer", "question": "What are the limits of combining graph neural networks with transformers for molecular property prediction?" },
+    { "id": "diffusion-text",  "question": "How do diffusion models handle discrete text compared to autoregressive models, and what is lost?" },
+    { "id": "sparse-retrieval", "question": "What effect do sparse attention patterns have on retrieval accuracy over long contexts?" },
+    { "id": "peft-quant",      "question": "How does parameter-efficient fine-tuning interact with quantization for low-resource deployment?" },
+    { "id": "rag-conflict",    "question": "How do retrieval-augmented systems behave when the retrieved sources contradict each other?" }
+  ]
+}

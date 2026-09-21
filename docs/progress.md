@@ -354,8 +354,8 @@ The graph compiles, the provider arrives through runtime context, tokens stream 
 
 ## Recursion depth measured — the headline feature did not pay (D-094)
 
-Recorded and scored 1, 2 and 3 rounds over the same ten questions (`abstract-top20-d0`,
-`-d1`, `-d2`). **2.8× the papers retrieved, 3× the arXiv requests, no quality difference the
+Recorded and scored 1, 2 and 3 rounds over the same ten questions
+(`broad-abstract-top20-d0`, `-d1`, `-d2`). **2.8× the papers retrieved, 3× the arXiv requests, no quality difference the
 harness can detect** — specificity 0.80 / 0.79 / 0.79, and the only delta past 2 SE is
 non-monotonic, which is the shape of noise.
 

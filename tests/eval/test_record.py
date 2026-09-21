@@ -36,7 +36,12 @@ from deep_research.agent.llm import get_chat_model
 from deep_research.agent.nodes.synthesize import format_papers
 from deep_research.agent.sources.rate_limit import ArxivRateLimiter
 from deep_research.persistence.checkpointer import build_serializer
-from tests.eval.recording import Recording, load_questions, save
+from tests.eval.recording import (
+    DEFAULT_QUESTION_SET,
+    Recording,
+    load_questions,
+    save,
+)
 
 PROVIDER = "openai"
 
@@ -74,6 +79,12 @@ async def _space_from_previous_question() -> None:
 # cost?" should be answered before the architecture is reshaped around either answer.
 EVAL_MAX_DEPTH = int(os.environ["EVAL_MAX_DEPTH"]) if "EVAL_MAX_DEPTH" in os.environ else MAX_DEPTH
 
+# Which frozen question set to record, e.g. EVAL_QUESTION_SET=narrow for O-14's intersection
+# questions. Unlike the depth override this patches nothing -- it selects an input file -- but
+# it lands in `settings` for the same reason: the arm name must say which questions were asked,
+# or two arms that asked different things look comparable.
+EVAL_QUESTION_SET = os.environ.get("EVAL_QUESTION_SET", DEFAULT_QUESTION_SET)
+
 
 def _settings() -> dict[str, object]:
     """Everything that makes one recording incomparable to another if it differs."""
@@ -84,6 +95,7 @@ def _settings() -> dict[str, object]:
         "max_subtopics": MAX_SUBTOPICS,
         "retrieval_unit": "abstract",  # O-13 will produce recordings with "full_text"
         "synthesis_top_n": SYNTHESIS_TOP_N,  # None = the pre-ranking baseline arm (D-091)
+        "question_set": EVAL_QUESTION_SET,  # which frozen set was asked (O-14)
     }
 
 
@@ -110,7 +122,7 @@ def monkeypatch_depth() -> None:
 @pytest.mark.record
 @pytest.mark.skipif(not os.environ.get("OPENAI_API_KEY"), reason="OPENAI_API_KEY not set")
 @pytest.mark.asyncio
-@pytest.mark.parametrize("case", load_questions(), ids=lambda c: c["id"])
+@pytest.mark.parametrize("case", load_questions(EVAL_QUESTION_SET), ids=lambda c: c["id"])
 async def test_record_a_run(case: dict[str, str]) -> None:
     """Run the agent once for real and save the result for later scoring.
 

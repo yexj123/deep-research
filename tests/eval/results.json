@@ -2,7 +2,7 @@
   "judge": "gpt-4o-mini",
   "scored_at": "2026-09-21T18:06:10.328610+00:00",
   "runs": {
-    "abstract-all-d2": {
+    "broad-abstract-all-d2": {
       "attention": {
         "ungrounded_citations": 0,
         "papers_in_context": 87,
@@ -94,7 +94,7 @@
         "specificity": 0.7957
       }
     },
-    "abstract-top20-d2": {
+    "broad-abstract-top20-d2": {
       "attention": {
         "ungrounded_citations": 0,
         "papers_in_context": 20,
@@ -186,7 +186,7 @@
         "specificity": 0.8086
       }
     },
-    "abstract-top20-d0": {
+    "broad-abstract-top20-d0": {
       "attention": {
         "ungrounded_citations": 0,
         "papers_in_context": 20,
@@ -278,7 +278,7 @@
         "specificity": 0.8045
       }
     },
-    "abstract-top20-d1": {
+    "broad-abstract-top20-d1": {
       "attention": {
         "ungrounded_citations": 0,
         "papers_in_context": 20,

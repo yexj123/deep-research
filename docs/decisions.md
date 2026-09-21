@@ -1266,7 +1266,8 @@ incapable of measuring it.
 
 **Both arms recorded and scored 2026-09-21**, same ten questions, same settings apart from
 `SYNTHESIS_TOP_N`. Raw data in `tests/eval/recordings/abstract-all/` and
-`.../abstract-top20/`; scores in `tests/eval/results.json`.
+`.../broad-abstract-top20-d2/`; scores in `tests/eval/results.json`. (Both were renamed by
+D-094 and O-14, which added the depth and question-set dimensions to the arm name.)
 
 | | abstract-all | abstract-top20 | change |
 |---|---|---|---|

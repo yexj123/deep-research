@@ -22,6 +22,15 @@ from typing import Any
 RECORDINGS_DIR = Path(__file__).parent / "recordings"
 QUESTIONS_FILE = Path(__file__).parent / "questions.json"
 
+# Question sets are separate files rather than one file with a `set` field, so that adding a
+# set physically cannot touch the frozen one (D-088). "broad" is the original ten single-area
+# survey prompts; "narrow" is O-14's intersection questions, built to need decomposition.
+QUESTION_SETS = {
+    "broad": QUESTIONS_FILE,
+    "narrow": Path(__file__).parent / "questions-narrow.json",
+}
+DEFAULT_QUESTION_SET = "broad"
+
 
 @dataclass(frozen=True)
 class Recording:
@@ -62,22 +71,30 @@ class Recording:
         return datetime.now(UTC).isoformat()
 
 
-def load_questions() -> list[dict[str, str]]:
-    """The frozen question set. Append-only: rewording one invalidates earlier recordings."""
-    return json.loads(QUESTIONS_FILE.read_text(encoding="utf-8"))["questions"]
+def load_questions(question_set: str = DEFAULT_QUESTION_SET) -> list[dict[str, str]]:
+    """One frozen question set. Append-only: rewording one invalidates earlier recordings."""
+    if question_set not in QUESTION_SETS:
+        raise ValueError(f"unknown question set {question_set!r}; have {sorted(QUESTION_SETS)}")
+    return json.loads(QUESTION_SETS[question_set].read_text(encoding="utf-8"))["questions"]
 
 
 def arm_name(settings: dict[str, Any]) -> str:
-    """A short, stable name for one configuration: "abstract-all", "abstract-top20", ...
+    """A short, stable name for one configuration: "broad-abstract-top20-d2", ...
 
     Derived from `settings` rather than passed in, so a recording can never be filed under an
     arm that does not match how it was produced. That mislabelling would be invisible and
     would silently corrupt every comparison drawn from it.
+
+    The question set is part of the name and is *always* written, with no default-is-omitted
+    special case: two arms differing only in which questions they asked are not comparable,
+    and a conditional prefix is exactly the shape of the D-094 mislabelling bug. Older
+    recordings were renamed to carry the `broad-` prefix rather than grandfathered.
     """
+    question_set = settings.get("question_set", DEFAULT_QUESTION_SET)
     unit = settings.get("retrieval_unit", "abstract")
     top_n = settings.get("synthesis_top_n")
     depth = settings.get("max_depth", 2)
-    return f"{unit}-{'all' if top_n is None else f'top{top_n}'}-d{depth}"
+    return f"{question_set}-{unit}-{'all' if top_n is None else f'top{top_n}'}-d{depth}"
 
 
 def save(recording: Recording) -> Path:
