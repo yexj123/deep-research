@@ -76,7 +76,8 @@ def arm_name(settings: dict[str, Any]) -> str:
     """
     unit = settings.get("retrieval_unit", "abstract")
     top_n = settings.get("synthesis_top_n")
-    return f"{unit}-{'all' if top_n is None else f'top{top_n}'}"
+    depth = settings.get("max_depth", 2)
+    return f"{unit}-{'all' if top_n is None else f'top{top_n}'}-d{depth}"
 
 
 def save(recording: Recording) -> Path:

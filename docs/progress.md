@@ -3,7 +3,7 @@
 What's done, what's next, and whose job each item is. Design reasoning
 lives in [`decisions.md`](decisions.md); this file only tracks status.
 
-**Last updated:** 2026-09-21 · **Current milestone:** 5 (web layer: FastAPI + SSE + SQLite)
+**Last updated:** 2026-09-21 · **Current milestone:** 5 done; evaluation (O-11 → O-14) in flight
 
 **Who writes what:** you write the implementation (`src/`); Claude writes every test
 (since 2026-09-19) and keeps the docs (since 2026-09-20) — `docs/*.md` and the README.
@@ -21,9 +21,17 @@ Backed by `CLAUDE.md`, the output style, and `Edit(/tests/**)`, `Edit(/docs/**)`
 - [x] Re-ran the paid integration test against the milestone 4 graph — **1 passed** in 35.34s
 - [x] Committed milestone 4 as `f34d0d8`
 - [ ] **Decide D-022's fate** — its per-subtopic overlap check is superseded for control flow by
-      D-075; retire it, or keep the ratio as thesis evidence (see Open)
-- [ ] **`notebooks/`: measure ungrounded citations against depth** (D-079, Open) — needed before
-      tuning `MAX_DEPTH` or `MAX_SUBTOPICS`, or those numbers are guesses
+      D-075; retire it, or keep the ratio as thesis evidence (see Open). **D-094 narrows this:**
+      as a *novelty* signal it provably cannot fire, so the only live question is whether the
+      ratio is worth keeping as evidence
+- [x] **Measured quality against depth** (D-094) — d0/d1/d2 recorded and scored; no detectable
+      difference, so `MAX_DEPTH` is *not* being tuned on this data (O-14 says why)
+- [ ] **O-14, step 1: a narrow-question set at d0 vs d2.** The frozen ten are all broad survey
+      prompts — the case least likely to need decomposition. This is the experiment that
+      decides whether recursion stays a feature or becomes an honest negative result. New
+      question set, appended (D-088), not an edit to the existing one
+- [ ] **`notebooks/`: measure ungrounded citations against depth** (D-079, Open) — the three
+      depth arms now exist, so this is a re-score of recorded data rather than new runs
 
 ## Milestone 5: web layer
 
@@ -343,6 +351,33 @@ The graph compiles, the provider arrives through runtime context, tokens stream 
 
 
 ---
+
+## Recursion depth measured — the headline feature did not pay (D-094)
+
+Recorded and scored 1, 2 and 3 rounds over the same ten questions (`abstract-top20-d0`,
+`-d1`, `-d2`). **2.8× the papers retrieved, 3× the arXiv requests, no quality difference the
+harness can detect** — specificity 0.80 / 0.79 / 0.79, and the only delta past 2 SE is
+non-monotonic, which is the shape of noise.
+
+The mechanism is one row of the table: **`retrieval_context` is 20 at every depth**, because
+D-091 ranks and truncates. Extra rounds cannot enlarge the prompt, only change which twenty
+papers win it — and BM25 over 28 candidates picks as good a top 20 as BM25 over 81. Pruning
+and recursion turn out to be **substitutes**, which nobody intended.
+
+**The prescribed semantic-exit fix was measured and abandoned before being built.** The
+planner does not paraphrase within a run (subtopic Jaccard median 0.14), and rounds are
+near-disjoint in retrieved papers (`attention` round 2: 30 found, 27 new). No novelty-based
+rule can fire on that data. Closed as unbuildable as specified → **O-14**, which asks the two
+questions that survive: does depth help on *narrow* questions, and should the exit be
+value-based (did the round change the review?) rather than novelty-based.
+
+**A defect in the harness, found by the same sweep and worth more than the comparison.**
+`MAX_DEPTH` is bound by value into both `graph.py` and `coverage.py`; the recorder patched
+only the first, so the d0/d1 recordings routed correctly but *described themselves as having
+converged* — the exact claim the experiment existed to test. Fixed, and pinned by
+`tests/eval/test_recordings_are_consistent.py`, which asserts on committed JSON at zero cost
+that a run using its whole depth budget can never report convergence. Fourth appearance of
+the D-062/D-069/D-084 pattern, first one inside the measuring instrument.
 
 ## The specificity metric, validated (D-093)
 

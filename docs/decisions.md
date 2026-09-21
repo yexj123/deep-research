@@ -1376,6 +1376,104 @@ The cheapest instrument being the most discriminating for the hypothesis was not
 outcome, and it is worth keeping: whatever O-13 does to specificity, `numeric_density` can be
 re-measured on every recording forever at zero cost.
 
+### D-094 — Recursion depth measured: 2.8× the retrieval, no measurable quality gain
+
+**The headline feature does not pay for itself on this question set, and the semantic exit
+cannot be fixed as specified.** Both halves were measured today, and both contradict what was
+written before the measurement — including what I wrote in D-090.
+
+**What was run.** `max_depth` became a recordable dimension: `arm_name` now carries `-d{depth}`
+(`tests/eval/recording.py`), and `EVAL_MAX_DEPTH` overrides the constant for a sweep. Three
+arms, same ten questions, same `SYNTHESIS_TOP_N=20`, same judge — 1, 2 and 3 rounds.
+
+| | d0 (1 round) | d1 (2 rounds) | d2 (3 rounds) |
+|---|---|---|---|
+| arXiv searches | 3.0 | 6.0 | 9.1 |
+| Papers retrieved | 28.6 | 56.6 | **81.3** |
+| **Papers in the prompt** | **20.0** | **20.0** | **20.0** |
+| Papers cited | 8.0 | 8.7 | 8.5 |
+| Specificity | 0.80 | 0.79 | 0.79 |
+| Faithfulness | 0.98 | 0.97 | 0.98 |
+| Relevancy | 1.00 | 0.96 | 0.98 |
+
+Paired differences against d0, in standard errors: specificity −1.0 / −1.7, faithfulness
+−0.6 / +0.2, relevancy −2.2 / −1.3. Only one exceeds 2 SE, and it is **non-monotonic** —
+d1 worse than both d0 and d2 — which is the shape of noise, not of a dose-response. Every
+other delta is inside the noise, and the two nominally *largest* effects favour **fewer**
+rounds.
+
+**The claim: three rounds retrieve 2.8× the papers and issue 3× the arXiv requests for no
+quality difference this harness can detect.** Not "recursion is useless" — see the limits
+below — but the burden of proof has moved, and it now sits on the feature.
+
+**The mechanism, which the table makes obvious in one row.** `retrieval_context` is **20 at
+every depth**, because D-091 ranks and truncates. So extra rounds cannot enlarge the synthesis
+prompt; they can only change *which* twenty papers win it. A deeper run picks its top 20 from
+81 candidates instead of 28 — a strictly better-informed choice — and the reviews are
+indistinguishable. That is a much sharper result than "more search doesn't help": **BM25 over
+28 papers already finds as good a top 20 as BM25 over 81.**
+
+This also means D-091 and recursion are **substitutes, not complements**, which nobody
+intended. Pruning was justified as a cost saving (D-092); it turns out to have quietly capped
+the only channel through which depth could have acted.
+
+---
+
+**The semantic exit cannot be fixed the way it was scoped, and D-090's diagnosis was wrong.**
+
+D-090 attributed the 10/10 ceiling stops to the planner paraphrasing itself, and the prescribed
+fix was lexical: catch rephrased subtopics with overlap or Jaccard distance rather than an LLM
+judge. Measured before building it:
+
+- Within-run subtopic Jaccard is **median 0.14, p99 0.50**, and every 0.50 pair inspected is
+  two genuinely distinct topics, not a rephrasing. **The planner does not paraphrase within a
+  run.**
+- Replaying recorded subtopics round by round, rounds are **almost entirely disjoint**:
+  `attention` round 2 found 30 papers, **27 of them new**.
+
+So there is nearly nothing for a lexical filter to catch, and no novelty rule — D-075's
+round-level test, D-022's subtopic-level paper overlap, or a paraphrase filter — can fire when
+27 of 30 papers are genuinely new. **The exit is not too weak; the premise that a broad arXiv
+query ever runs out of new papers is false.** A filter built to the original spec would have
+been dead code that passed its own tests, which is why it was measured first.
+
+**Rejected on the evidence:** the lexical paraphrase filter (nothing to catch); a minimum-new-
+papers threshold (would fire only on an arbitrary cutoff unrelated to whether anything was
+*learned*); and tuning `max_depth` while the exit is broken — D-090 said settle the exit before
+tuning the ceiling, and that ordering is now inverted, because there is no exit to settle.
+
+**Not decided here: the new default for `MAX_DEPTH`.** The measurement says d0 is as good as
+d2 on these ten questions, but the questions are all broad survey prompts ("how does X work"),
+which is the case least likely to need decomposition. Changing the default is a `src/` change
+and a product decision, and it deserves the narrow-question arm below first. Logged as an Open
+item rather than silently applied.
+
+**Limits of this result, stated plainly because the conclusion is unwelcome:** n=10, one run
+per cell, no narrow or multi-hop questions, and three of the five metrics are at their ceiling
+(D-092 already established they cannot resolve a 75% context cut). Specificity is the one with
+headroom (D-093), and it moved −1.7 SE toward *fewer* rounds. This is evidence of **no
+detectable effect**, which is not the same as evidence of no effect — but it is the only
+evidence that exists, and it cost three recording sweeps.
+
+---
+
+**A defect in the measuring instrument, found by the same sweep.** `MAX_DEPTH` is bound by
+value into both `graph.py` (routing) and `coverage.py` (reporting). `monkeypatch_depth()`
+patched only `graph.py`, so the d0 and d1 runs routed correctly but `_stop_reason` compared
+against the unpatched ceiling and wrote *"round N found no papers that earlier rounds hadn't
+already seen"* into all twenty recordings — the signature of the semantic exit **firing**, in
+the arms whose whole purpose was measuring that it never does. Read at face value it reverses
+the finding.
+
+This is D-062, D-069 and D-084 for the fourth time — **the system reporting more than it
+earned** — and the first time in the evaluation harness rather than the agent. The recorder now
+patches every module binding the constant, and
+`tests/eval/test_recordings_are_consistent.py` asserts the invariant on committed JSON at zero
+cost: a run that used its whole depth budget may never describe itself as converged. The
+twenty affected recordings had the derived field recomputed with the production `_stop_reason`
+itself, per arm; no agent output was altered, and nothing needed re-running, because the field
+is a function of `rounds` and `max_depth` alone.
+
 ## Open (proposed, not decided)
 
 **Settled 2026-09-20:** O-1 → D-064, O-2 → D-065, O-3 → D-066.
@@ -1421,6 +1519,37 @@ stay valid.
   provably cannot, since a round with one real subtopic and two paraphrases still adds papers.
   Settle before `max_depth` is tuned — tuning a ceiling that is doing all the work is tuning
   the wrong thing.
+
+  **Closed 2026-09-21 → D-094, which overturned the diagnosis above — including the part I
+  wrote.** The planner does *not* paraphrase within a run (subtopic Jaccard median 0.14; the
+  0.50 outliers are genuinely distinct topics), and rounds are near-disjoint in what they
+  retrieve (`attention` round 2: 30 papers found, 27 new). No novelty rule can fire on that
+  data — not D-075's round-level test, not D-022's subtopic paper-overlap, not a lexical
+  paraphrase filter. The exit is not too weak; **the premise that a broad arXiv query runs out
+  of new papers is false.** Closed as unbuildable as specified. What replaces it is O-14.
+
+- **O-14 — What should `MAX_DEPTH` default to, and should the exit be value-based?** Opened by
+  D-094, which measured 1, 2 and 3 rounds and found no quality difference the harness can
+  detect, at 2.8× the retrieval. Two questions, in order:
+
+  1. **Does depth help on questions built to need it?** The frozen ten are all broad survey
+     prompts — the case least likely to need decomposition, so D-094 may be measuring the
+     easy case rather than the feature. The cheap next experiment is a second question set of
+     narrow or multi-hop questions ("how does speculative decoding interact with quantization
+     on long-context models"), recorded at d0 and d2. The question set is append-only
+     (D-088), so this is a *new* set, not an edit to the existing one. **If depth shows no
+     gain there either, recursion is decoration and the honest thesis claim says so.**
+  2. **If it does help, the exit has to be value-based, not novelty-based.** Every rule
+     considered so far asks "did this round find anything *new*", which D-094 shows is always
+     yes. The question that actually matters is "did this round change the *review*" — e.g.
+     stop when a round contributes no paper that survives BM25 ranking into the top `N`
+     (`rank_sources` already computes exactly this, and it is free and deterministic, so it
+     fits D-088's rule that the free exact measurement stays primary). Note this would have
+     fired often in the d2 arm: 81 papers retrieved, 20 in the prompt.
+
+  **Not yet decided, and deliberately not applied:** lowering the default is a `src/` change
+  resting on n=10 broad questions, and D-079's warning about drawing rates from thin data
+  applies to me as much as to the model.
 
 - ~~**Evaluation needs a depth metric.**~~ **Settled → D-093**, and it found the number O-13
   should be judged on: reviews score ~0.80 specificity with headroom to 0.95, and contain
@@ -1814,3 +1943,4 @@ return nothing.
 | ~~O-11~~ | Evaluation harness | **Settled → D-088** | ~~before O-13~~ |
 | **O-12** | **In-band claim checker** | One node, one call; a product feature, not a thesis metric | After O-13 |
 | **O-13** | **Local-first corpus, BM25 first** | SQLite FTS5, no embedding model; sufficiency counted in distinct *papers*; dense retrieval demoted to a measured follow-on | Milestone 6 |
+| **O-14** | **`MAX_DEPTH` default + a value-based exit** | Measure a narrow-question set at d0 vs d2 first; the novelty-based exit is closed as unbuildable (D-094) | Before tuning depth |

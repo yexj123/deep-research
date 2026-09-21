@@ -11,7 +11,9 @@ scores. It fails only if the agent cannot complete a run at all, which is worth 
 before spending money on judging.
 """
 
+import asyncio
 import os
+import time
 
 import httpx
 import pytest
@@ -38,17 +40,71 @@ from tests.eval.recording import Recording, load_questions, save
 
 PROVIDER = "openai"
 
+# Spacing has to carry ACROSS tests, but a limiter cannot. Each question gets its own
+# ArxivRateLimiter for within-run concurrency; what is shared is only the timestamp of the
+# last arXiv request in this process.
+#
+# A module-level limiter was the obvious fix and is wrong for a reason D-064 already
+# documents: `asyncio.Semaphore` binds to the first event loop that touches it, and
+# pytest-asyncio gives each test a fresh loop -- so nine of ten questions died with
+# RuntimeError on the second loop. Having written that warning and then hit it anyway, the
+# timestamp is a plain float precisely because it belongs to no event loop.
+#
+# The problem is real: a replay script with per-question limiters drew HTTP 429 from arXiv
+# (2026-09-21). The app itself is fine -- create_app builds one limiter inside one lifespan.
+_LAST_ARXIV_REQUEST = 0.0
+
+
+async def _space_from_previous_question() -> None:
+    """Wait out arXiv's interval since the previous test's last request (D-064)."""
+    global _LAST_ARXIV_REQUEST
+    wait = ARXIV_MIN_INTERVAL_SECONDS - (time.monotonic() - _LAST_ARXIV_REQUEST)
+    if wait > 0:
+        await asyncio.sleep(wait)
+
+# Experiment override, e.g. EVAL_MAX_DEPTH=0 to record a single-round arm.
+# MAX_DEPTH is a module constant, so `from ..config import MAX_DEPTH` binds a *copy* into each
+# importing module's namespace and patching config.py alone changes nothing. Every binding has
+# to be patched, which is why _DEPTH_MODULES is a list rather than just graph.py: the first
+# version of this patched graph.py only, and coverage.py then reported the d0 and d1 arms as
+# having *converged* ("found no papers earlier rounds hadn't seen") when they had in fact hit
+# their ceiling -- the run routed correctly, but the artifact described it wrongly. That is the
+# D-062/D-069 failure mode again, this time in the measuring instrument.
+# Deliberately an env var rather than a src change: the question "does the recursion earn its
+# cost?" should be answered before the architecture is reshaped around either answer.
+EVAL_MAX_DEPTH = int(os.environ["EVAL_MAX_DEPTH"]) if "EVAL_MAX_DEPTH" in os.environ else MAX_DEPTH
+
 
 def _settings() -> dict[str, object]:
     """Everything that makes one recording incomparable to another if it differs."""
     return {
         "provider": PROVIDER,
         "model": MODEL_NAMES[PROVIDER],
-        "max_depth": MAX_DEPTH,
+        "max_depth": EVAL_MAX_DEPTH,
         "max_subtopics": MAX_SUBTOPICS,
         "retrieval_unit": "abstract",  # O-13 will produce recordings with "full_text"
         "synthesis_top_n": SYNTHESIS_TOP_N,  # None = the pre-ranking baseline arm (D-091)
     }
+
+
+# Every module that binds MAX_DEPTH at import time. graph.py decides routing; coverage.py
+# decides what the recording *says* about why the run stopped. Missing either one produces a
+# recording that is internally inconsistent, so they are patched together, from one list.
+_DEPTH_MODULES = ("deep_research.agent.graph", "deep_research.agent.coverage")
+
+
+def monkeypatch_depth() -> None:
+    """Apply the EVAL_MAX_DEPTH override to every module that imported MAX_DEPTH.
+
+    Pins the fix for the mislabelling described above: routing and reporting must agree about
+    what the ceiling is, or a ceiling stop gets recorded as a convergence.
+    """
+    if EVAL_MAX_DEPTH == MAX_DEPTH:
+        return
+    import importlib
+
+    for name in _DEPTH_MODULES:
+        importlib.import_module(name).MAX_DEPTH = EVAL_MAX_DEPTH
 
 
 @pytest.mark.record
@@ -62,15 +118,18 @@ async def test_record_a_run(case: dict[str, str]) -> None:
     question that failed, and re-recording a single question is `-m record -k <id>` rather
     than repeating the whole paid set.
     """
+    monkeypatch_depth()
+    await _space_from_previous_question()
     config: RunnableConfig = {
         "configurable": {"thread_id": f"eval-{case['id']}"},
         "recursion_limit": RECURSION_LIMIT,
     }
-    limiter = ArxivRateLimiter(ARXIV_MIN_INTERVAL_SECONDS)  # the real one: arXiv's terms apply
-
     async with httpx.AsyncClient(timeout=ARXIV_TIMEOUT_SECONDS) as http_client:
         graph = build_graph(
-            get_chat_model, http_client, limiter, InMemorySaver(serde=build_serializer())
+            get_chat_model,
+            http_client,
+            ArxivRateLimiter(ARXIV_MIN_INTERVAL_SECONDS),
+            InMemorySaver(serde=build_serializer()),
         )
         await graph.ainvoke(
             {"question": case["question"]},
@@ -80,7 +139,23 @@ async def test_record_a_run(case: dict[str, str]) -> None:
         )
         values = (await graph.aget_state(config)).values
 
+    global _LAST_ARXIV_REQUEST
+    _LAST_ARXIV_REQUEST = time.monotonic()
+
     assert values.get("review"), f"{case['id']}: the run produced no review"
+
+    # A run whose every subtopic failed is an OUTAGE, not evidence -- and it passes the check
+    # above, because the zero-papers review (D-060) is non-empty prose. Recording it would file
+    # an arXiv rate-limit incident as a legitimate zero-result measurement, which is this
+    # project's recurring failure shape arriving inside its own evaluation harness.
+    #
+    # A genuine "nothing published on X" run is different: those subtopics land in
+    # empty_subtopics having succeeded (D-021), not in failed_subtopics.
+    coverage = summarize_coverage(values)
+    assert coverage.explored or not coverage.failed, (
+        f"{case['id']}: every subtopic failed ({list(coverage.failed)}) -- this is an outage, "
+        "not data. Check arXiv is reachable and not rate-limiting, then re-record."
+    )
 
     # Exactly the papers that reached the prompt, which is what faithfulness must judge each
     # claim against (D-091). NOT every retrieved paper: once ranking prunes, those differ, and
@@ -98,7 +173,7 @@ async def test_record_a_run(case: dict[str, str]) -> None:
             retrieval_context=context,
             citation_violations=values.get("citation_violations", []),
             papers_retrieved=len(values.get("sources", [])),
-            coverage=vars(summarize_coverage(values)),
+            coverage=vars(coverage),
             settings=_settings(),
             recorded_at=Recording.now(),
         )

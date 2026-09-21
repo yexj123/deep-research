@@ -422,6 +422,13 @@ Claude writes and maintains every file here (since 2026-09-19; see `CLAUDE.md`).
 | `agent/test_recursion.py` [M4] | The whole cycle: a full-depth run fits RECURSION_LIMIT, 12 is one step too few, and each early exit (D-009, D-077) | `build_graph`, `make_arxiv_feed` |
 | `agent/test_fanout.py` [M3] | The whole graph fanning out: one worker per subtopic, reducers under parallel writes, partial failure, and which nodes stream (D-067, D-068, D-069) | `build_graph`, `fakes` |
 | `agent/test_checkpoint_roundtrip.py` [M2] | A `Source` comes back from a checkpoint as a `Source`, plus the control case (empty allowlist → `dict`) | `build_graph`, `build_serializer`, `JsonPlusSerializer`, `fakes` |
+| `eval/recording.py` [O-11] | The recording format: `Recording`, `arm_name(settings)` (the arm is *derived* from settings so a run can never be filed under a configuration that did not produce it), `save`, `load_all(arm)`, `arms()` | `questions.json`, `recordings/` |
+| `eval/questions.json` [O-11] | The frozen, **append-only** ten-question set. Rewording one invalidates every earlier recording (D-088) | read by `load_questions` |
+| `eval/metrics.py` [D-093] | `numeric_density` and `citation_density` (deterministic, free) plus `specificity_metric` (G-Eval). The free measurement stays primary (D-088) | `deepeval.GEval` |
+| `eval/test_record.py` [O-11] | **Opt-in, paid** (`-m record`): runs the real agent over the question set and saves one `Recording` per question. Holds the shared arXiv spacing, the outage assertion (every-subtopic-failed is an outage, not data) and `monkeypatch_depth`, which must patch **every** module binding `MAX_DEPTH` (D-094) | `build_graph`, `summarize_coverage`, `recording.py` |
+| `eval/test_review_quality.py` [O-11] | **Opt-in, paid** (`-m eval`): scores saved recordings per arm and writes `results.json`. Records citation violations rather than asserting on them — asserting would assert the *model* behaved (D-078) | `recording.load_all`, `metrics.py`, `deepeval` |
+| `eval/test_metrics.py` [D-093] | Tests the *instrument*: specificity must separate a deliberately concrete review from a deliberately vague one by >0.3 (measured 0.950 vs 0.222). A metric that scores everything ~0.95 is a number generator | `metrics.py` |
+| `eval/test_recordings_are_consistent.py` [D-094] | Free, no judge, no network: every committed recording must be filed under the arm its `settings` describe, may not exceed its own depth ceiling, and **may not report convergence after using its whole depth budget** — the harness bug that briefly reversed D-094's finding | `recording.arm_name`, `recordings/*/*.json` |
 
 ---
 
@@ -503,7 +510,7 @@ The graph code is identical in all three columns. Only the dependencies passed i
 | `ARXIV_MAX_RESULTS` [M2] | `agent/config.py` | `nodes/research_worker.py` | D-052 |
 | `ARXIV_MIN_INTERVAL_SECONDS` [M3] | `agent/config.py` | whoever builds the `ArxivRateLimiter` | D-064 |
 | `MAX_SUBTOPICS` [M3] | `agent/config.py` | `nodes/decompose.py` (prompt + filter cap) | D-070 |
-| `MAX_DEPTH` [M4] | `agent/config.py` | `graph.route_after_gap_check` | D-025, D-026, D-076 |
+| `MAX_DEPTH` [M4] | `agent/config.py` | `graph.route_after_gap_check` **and** `coverage._stop_reason` | D-025, D-026, D-076, D-094 |
 | `RECURSION_LIMIT` [M4] | `agent/config.py` | the **caller**, as invoke config — not the graph | D-077 |
 | `MAX_FAILURES` [M3] | `nodes/decompose.py` | the N=2 retry cap | D-020 |
 | `ARXIV_TIMEOUT_SECONDS` [M2] | `agent/config.py` | whoever creates the HTTP client (`test_integration.py` now) | D-052 |
