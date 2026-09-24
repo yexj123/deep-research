@@ -172,6 +172,66 @@ def index_sources(db: sqlite3.Connection, sources: Sequence[Source]) -> int:
     return added
 
 
+def index_full_text(
+    db: sqlite3.Connection, arxiv_id: str, chunks: Sequence[tuple[str, str]]
+) -> int:
+    """Index a paper's full-text chunks as `(section, text)` pairs. Returns chunks added.
+
+    The paper must already be in `papers` -- full text enriches a paper the corpus knows
+    about, it never introduces one. A chunk referencing an unknown `arxiv_id` would violate
+    the foreign key and, more importantly, would mean a paper searchable in full text but
+    absent from `load_sources`: retrievable and uncitable at once.
+
+    Idempotent on `(arxiv_id, tier, section)`, so re-enriching a paper is a no-op rather than
+    a second copy inflating its own BM25 term frequencies (D-100). That is why
+    `chunk_paper` numbers split sections -- three unnumbered "Methodology" chunks would
+    collapse to one here, silently losing two thirds of the section.
+
+    Sets `has_full_text`, which is what stops the enrichment pass re-fetching a paper it has
+    already read.
+    """
+    if not chunks:
+        return 0
+    with db:
+        known = db.execute(
+            "SELECT 1 FROM papers WHERE arxiv_id = ?", (arxiv_id,)
+        ).fetchone()
+        if not known:
+            raise ValueError(f"cannot index full text for unknown paper {arxiv_id!r}")
+
+        added = 0
+        for section, text in chunks:
+            cursor = db.execute(
+                "INSERT OR IGNORE INTO chunks (arxiv_id, tier, section, text)"
+                " VALUES (?, ?, ?, ?)",
+                (arxiv_id, FULL_TEXT, section, text),
+            )
+            added += cursor.rowcount or 0
+        db.execute("UPDATE papers SET has_full_text = 1 WHERE arxiv_id = ?", (arxiv_id,))
+    return added
+
+
+def papers_without_full_text(db: sqlite3.Connection, arxiv_ids: Sequence[str]) -> list[str]:
+    """Which of `arxiv_ids` the corpus knows but has not read in full, in the order given.
+
+    The enrichment pass's work list. Filtering here rather than at the call site keeps the
+    "have I already read this?" question in one place -- asking it twice is how a pass ends up
+    re-downloading papers it already has, at three seconds each.
+    """
+    if not arxiv_ids:
+        return []
+    placeholders = ",".join("?" * len(arxiv_ids))
+    rows = {
+        row[0]
+        for row in db.execute(
+            f"SELECT arxiv_id FROM papers WHERE arxiv_id IN ({placeholders})"
+            " AND has_full_text = 0",
+            list(arxiv_ids),
+        )
+    }
+    return [arxiv_id for arxiv_id in arxiv_ids if arxiv_id in rows]
+
+
 def search(
     db: sqlite3.Connection, query: str, limit: int, tier: str | None = None
 ) -> list[Hit]:

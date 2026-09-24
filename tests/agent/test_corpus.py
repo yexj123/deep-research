@@ -27,8 +27,10 @@ from deep_research.persistence.corpus import (
     SCHEMA,
     Hit,
     covering_papers,
+    index_full_text,
     index_sources,
     load_sources,
+    papers_without_full_text,
     search,
     stats,
     strongly_matching_papers,
@@ -469,3 +471,69 @@ def test_the_vocabulary_check_respects_the_tier(db) -> None:
 
     assert strongly_matching_papers(db, "quantized attention tiling", limit=10, tier=ABSTRACT) == []
     assert strongly_matching_papers(db, "quantized attention tiling", limit=10, tier=FULL_TEXT) != []
+
+
+# ---- the full-text tier (D-108, D-109) ----------------------------------------------
+
+
+def test_full_text_chunks_are_indexed_and_searchable(db) -> None:
+    """Enrichment adds a second tier to a paper the corpus already knows."""
+    index_sources(db, PAPERS)
+    target = PAPERS[0].arxiv_id
+
+    added = index_full_text(db, target, [("Method", "we tile the softmax denominator")])
+    assert added == 1
+    assert stats(db)["full_text_papers"] == 1
+
+    hits = search(db, build_fts_query("softmax denominator"), limit=10, tier=FULL_TEXT)
+    assert [h.arxiv_id for h in hits] == [target]
+
+
+def test_full_text_for_an_unknown_paper_is_refused(db) -> None:
+    """A chunk without its paper is retrievable and uncitable at once (D-023).
+
+    It would surface in search and then vanish at `load_sources`, so the review could not
+    cite what retrieval had just handed it -- a loss visible nowhere.
+    """
+    with pytest.raises(ValueError, match="unknown paper"):
+        index_full_text(db, "9999.99999", [("Method", "orphan chunk")])
+
+
+def test_re_enriching_a_paper_adds_nothing(db) -> None:
+    """Idempotent, for the same reason abstracts are (D-100).
+
+    A second copy of every chunk would double that paper's term frequencies and rank it above
+    papers that simply were not read twice.
+    """
+    index_sources(db, PAPERS)
+    chunks = [("Method", "we tile the softmax denominator"), ("Results", "2.1x faster")]
+    assert index_full_text(db, PAPERS[0].arxiv_id, chunks) == 2
+    assert index_full_text(db, PAPERS[0].arxiv_id, chunks) == 0
+    assert stats(db)["chunks"] == len(PAPERS) + 2
+
+
+def test_numbered_sections_survive_as_distinct_chunks(db) -> None:
+    """Why `chunk_paper` numbers split sections (D-108).
+
+    `UNIQUE(arxiv_id, tier, section)` would collapse three unnumbered "Methodology" chunks
+    into one, silently discarding two thirds of the section.
+    """
+    index_sources(db, PAPERS)
+    numbered = [(f"Methodology ({i})", f"part {i} about tiling") for i in (1, 2, 3)]
+    assert index_full_text(db, PAPERS[0].arxiv_id, numbered) == 3
+
+
+def test_the_work_list_skips_papers_already_read(db) -> None:
+    """Each re-fetch costs three seconds and a download, so asking twice is the bug (D-064)."""
+    index_sources(db, PAPERS)
+    ids = [p.arxiv_id for p in PAPERS]
+    assert papers_without_full_text(db, ids) == ids
+
+    index_full_text(db, ids[1], [("Method", "text")])
+    assert papers_without_full_text(db, ids) == [ids[0], ids[2]]
+
+
+def test_the_work_list_ignores_papers_the_corpus_does_not_have(db) -> None:
+    """Full text enriches what the corpus knows; it never introduces a paper."""
+    index_sources(db, PAPERS)
+    assert papers_without_full_text(db, ["9999.99999"]) == []

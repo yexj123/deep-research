@@ -112,17 +112,39 @@ EVAL_LOCAL_FIRST = (
 _CORPUS: sqlite3.Connection | None = None
 
 
+# EVAL_FULL_TEXT=1 records against the enriched corpus on disk (D-109) instead of the
+# abstracts-only one rebuilt in memory. The corpus *contents* are the variable -- the retrieval
+# code is identical, which is what makes the two arms differ by one thing (D-088).
+EVAL_FULL_TEXT = os.environ.get("EVAL_FULL_TEXT", "") not in ("", "0", "false")
+
+
 def _eval_corpus() -> sqlite3.Connection | None:
-    """The seeded corpus, or None when the arm does not use one."""
+    """The seeded corpus, or None when the arm does not use one.
+
+    Abstracts-only is rebuilt in memory from the committed recordings, so it is reproducible
+    by anyone with the repo. The full-text corpus is a file because enriching it costs ~18
+    minutes of rate-limited downloads; build it with `python -m tests.eval.enrich`.
+    """
     global _CORPUS
     if not EVAL_LOCAL_FIRST:
         return None
     if _CORPUS is None:
         from tests.eval.corpus_coverage import all_recorded_papers
 
-        _CORPUS = sqlite3.connect(":memory:", check_same_thread=False)
-        _CORPUS.executescript(CORPUS_SCHEMA)
-        index_sources(_CORPUS, all_recorded_papers())
+        if EVAL_FULL_TEXT:
+            from tests.eval.enrich import CORPUS_PATH
+            from deep_research.persistence.corpus import connect
+
+            if not CORPUS_PATH.exists():
+                raise RuntimeError(
+                    f"{CORPUS_PATH} does not exist. Build it first with:"
+                    " uv run python -m tests.eval.enrich"
+                )
+            _CORPUS = connect(str(CORPUS_PATH))
+        else:
+            _CORPUS = sqlite3.connect(":memory:", check_same_thread=False)
+            _CORPUS.executescript(CORPUS_SCHEMA)
+            index_sources(_CORPUS, all_recorded_papers())
     return _CORPUS
 
 
@@ -148,7 +170,11 @@ def _settings() -> dict[str, object]:
         # What is retrieved and from where. "abstract" is arXiv only; "abstract-local" adds
         # D-105's corpus-first path; "full_text" comes later. Reusing this key rather than
         # adding a dimension keeps the 80 committed arm names stable (D-088).
-        "retrieval_unit": "abstract-local" if EVAL_LOCAL_FIRST else "abstract",
+        "retrieval_unit": (
+            ("fulltext-local" if EVAL_FULL_TEXT else "abstract-local")
+            if EVAL_LOCAL_FIRST
+            else "abstract"
+        ),
         "synthesis_top_n": SYNTHESIS_TOP_N,  # None = the pre-ranking baseline arm (D-091)
         "question_set": EVAL_QUESTION_SET,  # which frozen set was asked (O-14)
         # "adaptive" once D-096's exits landed: the run may stop well before max_depth, so

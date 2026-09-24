@@ -43,3 +43,7 @@ Thumbs.db
 
 # Playwright MCP scratch output (snapshots, console logs) from /demo-check
 .playwright-mcp/
+
+# The full-text corpus is regenerable (uv run python -m tests.eval.enrich) and large.
+# Abstracts rebuild from the committed recordings; full text is fetched, never redistributed (D-008).
+tests/eval/corpus-fulltext.sqlite
