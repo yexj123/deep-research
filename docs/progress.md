@@ -62,11 +62,32 @@ the same SQLite file as the checkpoints. Verified end to end: one real run throu
 route leaves **3 papers, 3 chunks**. Nothing *reads* the corpus yet, so the review is still
 written from exactly the same papers as before.
 
+**Local-first measured and shipped (D-107).** Both question sets recorded with the corpus
+answering covered subtopics, scored against the arXiv-only default:
+
+| | arXiv-only | local-first |
+|---|---|---|
+| arXiv requests | **65** | **1** |
+| wall clock (both sweeps) | 703 s | **248 s (−65%)** |
+| specificity | 0.78 | 0.78 |
+| faithfulness | 0.98 | 0.99 |
+| papers cited | 7.95 | 7.90 |
+
+Every quality metric inside 2 SE. `LOCAL_FIRST` now defaults **on** — safe by construction,
+since an empty corpus covers nothing and a first run falls through to arXiv unchanged.
+
+**The open risk is staleness, logged as O-16:** nothing ever re-fetches a subtopic the corpus
+already covers, so a topic researched in March can stay answered from March's papers. D-105
+makes it visible in the coverage panel; making it *bounded* needs a measured max age, and that
+experiment needs time to pass rather than compute.
+
 **Next, in order:**
 1. ~~Wire the corpus into `research_worker`~~ — **done (D-101)**.
-2. **Measure `MIN_LOCAL_PAPERS` and top-k** before letting the corpus *answer* a subtopic.
-   These are the two numbers O-13 says must not be guessed (D-077's lesson).
-3. **Local-first retrieval** in the worker, augmenting rather than replacing on fallback.
+2. ~~Measure `MIN_LOCAL_PAPERS` and top-k~~ — **done (D-104, D-106)**. The test O-13
+   specified could not discriminate at all; term coverage plus a whole-vocabulary
+   precondition does.
+3. ~~Local-first retrieval~~ — **done (D-105, D-107)**. Skipping, not augmenting: the
+   evidence said augmenting buys nothing.
 4. **Full text** — the tier that O-13's comparison actually tests, and the one D-093 predicts
    should move `numeric_density` first (five of ten reviews currently contain no numbers).
 5. **Staleness in the coverage panel** — now cheap, since D-099 made that panel unconditional.

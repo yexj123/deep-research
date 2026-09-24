@@ -90,14 +90,22 @@ LOCAL_SEARCH_TOP_K: int = 20
 
 # Whether a covered subtopic is answered from the corpus *instead of* searching arXiv (O-13).
 #
-# **Off until a recorded arm says otherwise**, the same discipline as SYNTHESIS_TOP_N (D-091):
-# this changes what reaches the review, so it gets measured before it becomes the default.
+# **On since D-107, which measured it** over 20 paired questions in two difficulty classes:
 #
-# The reasoning for skip-rather-than-augment, which the evidence already settles (D-105):
-# two runs of the same question retrieve **~89% different papers** (mean Jaccard overlap 11%,
-# median 8%, measured across 20 questions and 80 recordings), and those runs produce
-# statistically indistinguishable reviews (D-094, D-095: every quality metric within 2 SE).
-# Paper *identity* therefore does not drive quality -- topical relevance does -- so corpus
-# papers should serve as well as fresh ones. Augmenting instead would keep the network call,
-# add papers that ranking truncates away at SYNTHESIS_TOP_N, and buy nothing measurable.
-LOCAL_FIRST: bool = False
+#   arXiv requests   65 -> 1        wall clock  703s -> 248s  (-65%)
+#   specificity      0.78 -> 0.78   faithfulness 0.98 -> 0.99   papers cited 7.95 -> 7.90
+#
+# Every quality metric inside 2 SE; the two that moved at all moved upward. The mechanism is
+# D-105's: two runs of the same question retrieve ~89% different papers yet produce
+# indistinguishable reviews, so paper *identity* does not drive quality -- topical relevance
+# does, and the corpus has that.
+#
+# **Safe on a cold corpus by construction.** An empty corpus covers nothing, so a first run
+# falls through to arXiv and behaves exactly as before. The feature can only fire where it
+# has evidence to fire on.
+#
+# **The risk it does carry is staleness, and this experiment cannot see it**: the corpus was
+# measured at one moment in time. A topic researched repeatedly could stay answered from
+# cache indefinitely while arXiv moves on. That is reported in the coverage panel (D-105)
+# rather than silently defended against, and the open item says what would settle it.
+LOCAL_FIRST: bool = True

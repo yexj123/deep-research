@@ -24,6 +24,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from deep_research.agent.config import (
     ARXIV_MIN_INTERVAL_SECONDS,
     ARXIV_TIMEOUT_SECONDS,
+    LOCAL_FIRST,
     MAX_DEPTH,
     MAX_SUBTOPICS,
     MODEL_NAMES,
@@ -92,7 +93,14 @@ EVAL_QUESTION_SET = os.environ.get("EVAL_QUESTION_SET", DEFAULT_QUESTION_SET)
 # answered from it and arXiv is not called. Like EVAL_MAX_DEPTH this patches the module that
 # imported the constant, not config -- `from ..config import LOCAL_FIRST` binds a copy
 # (the D-094 lesson).
-EVAL_LOCAL_FIRST = os.environ.get("EVAL_LOCAL_FIRST", "") not in ("", "0", "false")
+# Defaults to config's value (True since D-107). Set EVAL_LOCAL_FIRST=0 to record the
+# arXiv-only arm -- both directions stay reproducible from one codebase whichever way the
+# default points, which is what keeps the pre-D-107 recordings comparable (D-088, D-091).
+EVAL_LOCAL_FIRST = (
+    os.environ["EVAL_LOCAL_FIRST"] not in ("0", "false", "")
+    if "EVAL_LOCAL_FIRST" in os.environ
+    else LOCAL_FIRST
+)
 
 # The corpus is rebuilt in memory from the committed recordings rather than kept as a file:
 # 1669 papers, indexed in about a second, and reproducible by anyone who has the repo. A
@@ -119,11 +127,15 @@ def _eval_corpus() -> sqlite3.Connection | None:
 
 
 def monkeypatch_local_first() -> None:
-    """Apply EVAL_LOCAL_FIRST to the module research_worker actually reads."""
-    if EVAL_LOCAL_FIRST:
-        import deep_research.agent.nodes.research_worker as worker_module
+    """Apply EVAL_LOCAL_FIRST to the module research_worker actually reads.
 
-        worker_module.LOCAL_FIRST = True
+    Sets it either way rather than only when enabling: once the default flipped to True
+    (D-107), an arXiv-only arm needs it turned *off*, and a one-directional patch would have
+    recorded that arm under the wrong settings while looking correct.
+    """
+    import deep_research.agent.nodes.research_worker as worker_module
+
+    worker_module.LOCAL_FIRST = EVAL_LOCAL_FIRST
 
 
 def _settings() -> dict[str, object]:

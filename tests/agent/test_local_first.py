@@ -13,9 +13,11 @@ So paper *identity* does not drive quality; topical relevance does. Augmenting w
 network call, add papers that ranking truncates away at `SYNTHESIS_TOP_N`, and buy nothing
 measurable. Skipping buys the call.
 
-**`LOCAL_FIRST` is off by default**, so these tests enable it explicitly. That is the D-091
-discipline: a change to what reaches the review gets a recorded arm before it becomes the
-default, and the off state stays reproducible from the same codebase (D-088).
+**`LOCAL_FIRST` is on by default since D-107**, which measured it: 65 arXiv requests down to
+1, wall clock down 65%, and every quality metric inside 2 SE. These tests still patch it
+explicitly in both directions, because a default is not a contract -- the off state has to
+stay reachable so the arXiv-only arm remains reproducible from this same codebase (D-088,
+D-091).
 
 **What is deliberately NOT tested here: that local answers are as good.** That needs a paid
 arm and a judge, not a unit test. Asserting it here would be the D-078 mistake.
@@ -117,17 +119,32 @@ async def test_a_thinly_covered_subtopic_still_calls_arxiv(local_first, corpus) 
 
 
 @pytest.mark.asyncio
-async def test_the_feature_is_off_by_default(corpus) -> None:
-    """Without the fixture enabling it, behaviour is exactly today's (D-091, D-088).
+async def test_the_feature_can_be_turned_off(corpus, monkeypatch) -> None:
+    """Disabled, behaviour is exactly the pre-D-107 default (D-091, D-088).
 
-    This is what keeps the 80 committed recordings comparable to anything recorded after
-    local-first lands.
+    The switch has to work in *both* directions: the arXiv-only arm is recorded by turning
+    this off, and it is what keeps the 80 earlier recordings comparable.
     """
+    monkeypatch.setattr(worker_module, "LOCAL_FIRST", False)
     index_sources(corpus, COVERED)
     update, requests = await _run(corpus)
 
-    assert len(requests) == 1, "LOCAL_FIRST defaults off, so arXiv must still be called"
+    assert len(requests) == 1, "with LOCAL_FIRST off, arXiv must still be called"
     assert "local_subtopics" not in update
+
+
+@pytest.mark.asyncio
+async def test_an_empty_corpus_falls_through_to_arxiv(corpus) -> None:
+    """Cold start: the default being on must not break a first run (D-107).
+
+    An empty corpus covers nothing, so the feature cannot fire before it has evidence to fire
+    on. This is what makes defaulting it on safe rather than optimistic.
+    """
+    update, requests = await _run(corpus)
+
+    assert len(requests) == 1
+    assert "local_subtopics" not in update
+    assert update["sources"]
 
 
 @pytest.mark.asyncio

@@ -2086,6 +2086,59 @@ answers locally on the strength of text it was configured not to use (D-088).
 100% is what surfaced the distribution mismatch. It is still 100% after the fix, because the
 seeded corpus genuinely holds these questions' papers -- but now for the right reason.
 
+### D-107 — Local-first measured: 65 arXiv requests become 1, quality unchanged
+
+**Both question sets recorded with `LOCAL_FIRST` on and scored against the current default.**
+20 paired questions, same judge, one variable changed.
+
+| metric | arXiv-only | local-first | delta | SE |
+|---|---|---|---|---|
+| **arXiv requests (total)** | **65** | **1** | −64 | — |
+| **wall clock (both sweeps)** | **703 s** | **248 s** | **−65%** | — |
+| papers cited | 7.95 | 7.90 | −0.05 | −0.1 |
+| specificity | 0.78 | 0.78 | −0.00 | −0.4 |
+| faithfulness | 0.98 | 0.99 | +0.01 | +1.1 |
+| relevancy | 0.98 | 0.99 | +0.01 | +0.9 |
+| ungrounded citations | 0.05 | 0.00 | −0.05 | −1.0 |
+
+**Every quality metric inside 2 SE, and the two that moved at all moved upward.** Reproduce
+with `uv run python -m tests.eval.compare broad-abstract-top20-d2-adaptive
+broad-abstract-local-top20-d2-adaptive narrow-abstract-top20-d2-adaptive
+narrow-abstract-local-top20-d2-adaptive`.
+
+**Decision: `LOCAL_FIRST` defaults to on.**
+
+**Why that is safe rather than optimistic.** An empty corpus covers nothing, so a first run
+falls through to arXiv and behaves exactly as before — the feature cannot fire before it has
+evidence to fire on. The switch works in **both** directions so the arXiv-only arm stays
+reproducible from this codebase (D-088).
+
+**The fallback path was exercised, not just the happy one.** `gnn` answered two subtopics from
+the corpus and went to arXiv for the third — that is the one remaining request.
+
+**`papers_retrieved` went up, 29 → 51.8**, because the corpus returns up to
+`LOCAL_SEARCH_TOP_K` per subtopic where arXiv returns `ARXIV_MAX_RESULTS`. `papers_in_prompt`
+stayed pinned at 20: ranking discards the surplus, D-094's mechanism again. More candidates,
+same prompt, same review.
+
+---
+
+**What this experiment cannot see, stated plainly because the result is favourable.**
+
+1. **It is the best case.** The corpus was seeded from earlier runs of *these exact
+   questions*, so coverage was 100%. A corpus grown from adjacent rather than identical
+   research will cover less, and the fallback will carry more of the load.
+2. **It is one moment in time.** A topic researched repeatedly could stay answered from cache
+   indefinitely while arXiv moves on — and this arm, recorded in a single afternoon, cannot
+   distinguish a fresh corpus from a frozen one. The coverage panel reports which subtopics
+   were answered locally (D-105) so the reader can judge, but nothing forces a refresh.
+
+The second is the real open risk, and it is logged as **O-16** rather than defended against
+with a guessed time limit — `recursion_limit = 150` again (D-077).
+
+**Cost of the finding:** two recording sweeps (~4 min, down from ~12) and one scoring sweep
+(~9 min).
+
 ## Open (proposed, not decided)
 
 **Settled 2026-09-20:** O-1 → D-064, O-2 → D-065, O-3 → D-066.
@@ -2607,6 +2660,27 @@ return nothing.
   is a template change plus deciding whether the line reads as a caption or a sentence. Worth
   doing before any demo where someone asks why it only searched once.
 
+- **O-16 — a corpus that answers a topic forever never refreshes it.** Opened by D-107.
+  `LOCAL_FIRST` is on, coverage was 100% on the measured questions, and nothing in the design
+  ever re-fetches a subtopic the corpus already covers. arXiv grows ~100 GB a month, so a
+  topic researched in March can stay answered from March's papers indefinitely — silently,
+  which is this project's recurring failure shape (D-062, D-069, O-5).
+
+  D-105 makes it *visible* (the panel names locally-answered subtopics and says papers
+  published since are not represented), but visible is not the same as handled.
+
+  | Option | Pros | Cons |
+  |---|---|---|
+  | **A. Report only (today)** | Zero work; the reader can judge and re-run | A reader who does not read the panel gets a stale review that looks current |
+  | **B. Max age per paper** — coverage ignores chunks indexed more than N days ago | Bounded staleness, cheap to implement (`indexed_at` is already stored) | N is unmeasured, and guessing it is exactly what D-077 warns against |
+  | **C. Refresh on a schedule** — re-search covered subtopics every N runs | Keeps the corpus alive without per-run cost | Same unmeasured N, plus surprise latency on an arbitrary run |
+  | **D. Always search, use the corpus only to enrich** | No staleness at all | Gives up the entire measured benefit (D-105 rejected this on evidence) |
+
+  **Recommendation: A now, B when there is a number.** The experiment that produces one needs
+  *time to pass*, not compute: re-record a covered question against a corpus seeded weeks or
+  months earlier and compare specificity and citation recency. That is genuinely future work,
+  and saying so is better than shipping a guessed N.
+
 ### Summary
 
 | # | Item | Recommendation | Needed by |
@@ -2624,5 +2698,6 @@ return nothing.
 | ~~O-11~~ | Evaluation harness | **Settled → D-088** | ~~before O-13~~ |
 | **O-12** | **In-band claim checker** | One node, one call; a product feature, not a thesis metric | After O-13 |
 | ~~O-15~~ | ~~Stop reason invisible on a clean run~~ | **Settled → D-099** | ~~Before a demo~~ |
+| **O-16** | **A covered topic never refreshes** | Report only (D-105) until a measured max age exists; the experiment needs time to pass, not compute | When the corpus is months old |
 | **O-13** | **Local-first corpus, BM25 first** | SQLite FTS5, no embedding model; sufficiency counted in distinct *papers*; dense retrieval demoted to a measured follow-on | Milestone 6 |
 | ~~O-14~~ | ~~`MAX_DEPTH` default + a yield-based exit~~ | **Settled → D-096.** Adaptive exits instead of a lower ceiling: −66% searches, quality flat, 19/20 runs stop after one round | ~~Now~~ |
