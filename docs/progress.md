@@ -30,7 +30,7 @@ Backed by `CLAUDE.md`, the output style, and `Edit(/tests/**)`, `Edit(/docs/**)`
       scored; depth fails on intersection questions too, and fails hardest there
 - [x] **O-14 settled → D-096 (`ac1b37c`, measured in `8e267b6`)** — adaptive exits instead of a lower `MAX_DEPTH`:
       −66% arXiv searches, quality flat, 19/20 runs stop after one round. `MAX_DEPTH` stays 2
-- [x] **Reviewed D-096's `src/` changes → D-098 (`pending`)** — the three judgement calls
+- [x] **Reviewed D-096's `src/` changes → D-098 (`7ae7b23`)** — the three judgement calls
       settled: `EMPTY_ROUND_RATIO` promoted to a named constant (unchanged at 0.5), the
       empty-round exit kept because it covers the thin-question case `PROMPT_FULL` structurally
       cannot, and `MAX_DEPTH` left at 2 because lowering it to 0 would make the adaptive exits
