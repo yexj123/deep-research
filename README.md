@@ -10,6 +10,20 @@ LangGraph, FastAPI, SQLite. No build step, no `node_modules`.
 > **Status:** the agent and web layer both work end to end. Built one milestone at a time —
 > see [`docs/progress.md`](docs/progress.md) for exactly what is done.
 
+### It was measured, and three of its four ideas did not survive
+
+Recursive decomposition, deeper search and full-text retrieval were each built, evaluated
+against a frozen question set, and found **not** to improve review quality. The local corpus
+did pay — in cost, not quality: **65 arXiv requests became 1, wall clock fell 65%**, with every
+quality metric unchanged.
+
+The agent you run today is therefore **cheaper than its first design** — one search round
+instead of three — with no measured quality cost.
+
+**[`docs/findings.md`](docs/findings.md) is the evidence**, including the metric validated
+before it was trusted (0.950 concrete vs 0.222 vague), what each null cost to obtain, and what
+would overturn it. Every table regenerates from the committed recordings with no API key.
+
 ---
 
 ## Requirements
@@ -122,13 +136,21 @@ primary failure mode, so these are stated rather than buried:
 - **arXiv only.** Semantic Scholar is designed for but not built.
 - **English-first.** Non-ASCII terms work, but stopword removal is English-only.
 - **Single-user, no auth.** Intended for localhost. If you expose it, put a password in front.
-- **Abstracts, not full text.** The review is written from titles and abstracts, which are
-  treated as untrusted input.
+- **Abstracts, not full text — and that is a measured choice, not a missing feature.** Full
+  text is built and switchable (`EXCERPT_MAX_CHARS`). Turned on it costs 2.8x the prompt and
+  improves nothing past 2 SE, while faithfulness drifts *down*. See `D-111`.
+- **One search round, not three.** Recursion exists and is bounded, but the adaptive exits
+  stop 19 of 20 runs after a single round, because rounds two and three measurably added
+  nothing (`D-094`, `D-096`).
+- **Retrieval and synthesis always read the same text.** Selecting papers on full text while
+  showing the model only abstracts measured *worse* than having no full text at all
+  (faithfulness −3.1 SE, `D-110`). The configuration is unreachable rather than discouraged.
 
 ## Documentation
 
 | File | What's in it |
 |---|---|
+| [`docs/findings.md`](docs/findings.md) | **What the measurements say** — the four premises, the evidence, and the three that failed |
 | [`docs/decisions.md`](docs/decisions.md) | Every design choice, why, and what was rejected |
 | [`docs/walkthrough.md`](docs/walkthrough.md) | One run end to end, with real captured values |
 | [`docs/code-map.md`](docs/code-map.md) | What each file does and what imports what |
