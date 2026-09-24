@@ -2239,6 +2239,26 @@ return nothing.
 
 ---
 
+- **O-15 — the stop reason is invisible on a clean run.** Found by `/demo-check` on
+  2026-09-24. `runs.py:145` and `pages.py:64` send `coverage_html` only when
+  `coverage.is_complete` is false — D-086's choice, so a clean run is not cluttered with a
+  list of nothing. That was right when the panel only ever reported *losses*.
+
+  D-096 changed what it has to say. Runs now stop after **one** round, and a viewer who
+  watches three searches and then synthesis has no way to learn why it did not go deeper.
+  "Enough papers were found to fill the synthesis context" reads as confidence; its absence
+  invites "did it give up?". The sentence exists, is tested, and is never shown.
+
+  | Option | Pros | Cons |
+  |---|---|---|
+  | **A. Always show `stopped_because`, keep the loss list conditional** | One line of prose costs nothing and answers the obvious question. Separates "why it stopped" from "what it lost", which D-086 conflated | The panel appears on every run, so it must read well when there is nothing wrong |
+  | **B. Show the panel whenever the stop reason is *not* the depth ceiling** | Only surfaces the reassuring cases | Backwards: the ceiling case is the one a reader most needs to see |
+  | **C. Leave it** | No work | The feature most in need of explaining to a judge is the one with no explanation in the UI |
+
+  **Recommendation: A**, and it is small — `is_complete` already distinguishes the two, so it
+  is a template change plus deciding whether the line reads as a caption or a sentence. Worth
+  doing before any demo where someone asks why it only searched once.
+
 ### Summary
 
 | # | Item | Recommendation | Needed by |
@@ -2255,5 +2275,6 @@ return nothing.
 | O-10 | Non-English stopwords | Accept and document | Any time |
 | ~~O-11~~ | Evaluation harness | **Settled → D-088** | ~~before O-13~~ |
 | **O-12** | **In-band claim checker** | One node, one call; a product feature, not a thesis metric | After O-13 |
+| **O-15** | **Stop reason invisible on a clean run** | Always show `stopped_because`; keep the loss list conditional. Found by `/demo-check` | Before a demo |
 | **O-13** | **Local-first corpus, BM25 first** | SQLite FTS5, no embedding model; sufficiency counted in distinct *papers*; dense retrieval demoted to a measured follow-on | Milestone 6 |
 | ~~O-14~~ | ~~`MAX_DEPTH` default + a yield-based exit~~ | **Settled → D-096.** Adaptive exits instead of a lower ceiling: −66% searches, quality flat, 19/20 runs stop after one round | ~~Now~~ |

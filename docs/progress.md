@@ -37,11 +37,43 @@ Backed by `CLAUDE.md`, the output style, and `Edit(/tests/**)`, `Edit(/docs/**)`
       unreachable
 - [x] **O-8 / D-097 — the nonce fence** (`6693e44`) — `new_fence`, `system_prompt(fence)` and
       `format_papers(sources, fence="")` in `synthesize.py`; 14 tests green, 538 total
-- [ ] **Run `/demo-check` yourself** — Claude cannot invoke it. Milestone 5's last unticked
-      box, and D-096 changed what the coverage panel says, so the new sentence has never been
-      rendered in a browser
+- [x] **`/demo-check` run 2026-09-24 — passed.** Two real runs through the HTTP route plus a
+      sidebar replay. All three stream modes arrive in order (8 `node`, 6 `progress`, 556
+      `token`), tokens render progressively in the browser (0 → 773 → 1801 → 2930 chars),
+      7 citations each with `citation_violations == []`, server log clean. **D-096 confirmed
+      live: both runs stopped after one round**, which no unit test could show. Two cosmetic
+      findings below
 - [ ] **`notebooks/`: measure ungrounded citations against depth** (D-079, Open) — the three
       depth arms now exist, so this is a re-score of recorded data rather than new runs
+
+## /demo-check, 2026-09-24 — passed, with two cosmetic findings
+
+Two real runs through the HTTP route plus a sidebar replay, on a clean server start.
+
+**What passed:** startup with no import errors; all three stream modes interleaved in order
+(8 `node`, 6 `progress`, 556 `token`); progressive rendering in the browser (0 → 773 → 1801 →
+2930 chars over six seconds); 7 distinct citations per run with `citation_violations == []`;
+markdown rendered as headings with no raw HTML leaking (D-085); sidebar replay restoring a
+finished run complete with its metadata line; server log free of errors, warnings and 500s.
+
+**D-096 confirmed live.** Both runs went `intake → decompose → 3× research_worker → gap_check
+→ synthesize → check_citations` — **one round, no loop back to decompose.** The adaptive exit
+fires in the real graph, which only an end-to-end run could show.
+
+**Finding 1 (cosmetic): `GET /favicon.ico` 404s**, the only console error on the page. Nobody
+notices until someone opens devtools during a demo and sees red.
+
+**Finding 2 (design, worth a decision): the stop reason is invisible on a clean run.**
+`runs.py:145` sends `coverage_html` only when `coverage.is_complete` is false, which D-086
+chose so a clean run isn't cluttered with a list of nothing. Correct as written — but D-096
+means runs now stop after *one* round, and a viewer watching three searches and then synthesis
+has no way to learn why it didn't go deeper. "Enough papers were found to fill the synthesis
+context" is reassuring; its absence invites "did it give up?". Logged as O-15.
+
+**On flakiness:** two runs is not a flakiness measurement. Both were clean and identically
+shaped, but this says nothing about the ~3% per-planner-call JSON failure D-089 measured
+(D-070). A run *will* eventually die on an unparseable plan; that is a known unfixed risk, not
+something this check cleared.
 
 ## Milestone 5: web layer
 
@@ -74,8 +106,9 @@ frontend `ac20b98`.
       "Coverage and limitations" panel
 - [x] **Sidebar of past runs** (D-087): click to reopen a run; unfinished runs offer to start
       or resume, which D-081 makes cheap
-- [ ] **Run it end to end in a browser** — the one thing tests cannot reach: that tokens
-      appear progressively and the review renders. `/demo-check` covers this.
+- [x] **Run it end to end in a browser** — done 2026-09-24 via `/demo-check`: tokens appear
+      progressively and the review renders with headings and citations. Milestone 5 is now
+      complete with nothing unverified.
 
 **Where htmx actually ended up.** D-080 expected it to handle the page, the form, history and
 the progress trail. In practice the run flow needs `fetch` + `EventSource` anyway, so the form
