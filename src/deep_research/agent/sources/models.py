@@ -33,6 +33,13 @@ class Source:
     summary: str
     published: datetime
     url: str  # abstract page, e.g. "https://arxiv.org/abs/2411.18583v1"
+    # Full-text passages that matched the query, when the corpus has read the paper (D-110).
+    # A separate field rather than overwriting `summary`: the abstract is what arXiv published
+    # and stays what it says, while `excerpt` is what *this query* found inside the paper. A
+    # `Source` whose `summary` silently became something else would be a record that lies
+    # about its own provenance -- and empty here is the honest default for every paper the
+    # corpus has only ever seen the abstract of.
+    excerpt: str = ""
 
     @field_validator("arxiv_id")
     @classmethod

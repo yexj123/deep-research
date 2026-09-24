@@ -355,6 +355,51 @@ def strongly_matching_papers(
     return [paper for paper in top if matches[paper] >= needed]
 
 
+def matching_excerpts(
+    db: sqlite3.Connection, question: str, arxiv_ids: Sequence[str], max_chars: int
+) -> dict[str, str]:
+    """For each paper, its best-matching full-text passages, up to `max_chars` (D-110).
+
+    **This is what actually puts full text in front of the model.** Without it, full text only
+    changes *which* papers retrieval finds and the review still reads abstracts -- which is
+    what the first full-text arm accidentally measured.
+
+    Passages are chosen by the same BM25 ranking as everything else, so a paper contributes the
+    part of itself that answers *this* query rather than its opening paragraphs. Sections are
+    labelled in the excerpt because "the Results section says 2.1x" is a stronger claim for a
+    reader, and a citation checker (O-12), than an unattributed sentence.
+
+    Papers with no full text are absent from the result, so the caller falls back to their
+    abstract. That keeps every unenriched paper byte-identical to the abstracts-only arm.
+    """
+    if not arxiv_ids:
+        return {}
+    try:
+        query = build_fts_query(question)
+    except ValueError:
+        return {}
+
+    placeholders = ",".join("?" * len(arxiv_ids))
+    rows = db.execute(
+        "SELECT c.arxiv_id, c.section, c.text FROM chunks_fts"
+        " JOIN chunks c ON c.id = chunks_fts.rowid"
+        f" WHERE chunks_fts MATCH ? AND c.tier = ? AND c.arxiv_id IN ({placeholders})"
+        " ORDER BY bm25(chunks_fts)",
+        [query, FULL_TEXT, *arxiv_ids],
+    )
+
+    excerpts: dict[str, list[str]] = {}
+    used: dict[str, int] = {}
+    for arxiv_id, section, text in rows:
+        budget = used.get(arxiv_id, 0)
+        if budget >= max_chars:
+            continue
+        passage = f"[{section}] {text}" if section else text
+        excerpts.setdefault(arxiv_id, []).append(passage[: max_chars - budget])
+        used[arxiv_id] = budget + len(passage)
+    return {arxiv_id: "\n\n".join(parts) for arxiv_id, parts in excerpts.items()}
+
+
 def load_sources(db: sqlite3.Connection, arxiv_ids: Sequence[str]) -> list[Source]:
     """Rebuild `Source` objects for the given ids, in the order asked for.
 

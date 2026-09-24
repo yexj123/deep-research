@@ -2,6 +2,7 @@
 
 import sqlite3
 from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import replace
 from typing import Any, TypedDict
 from xml.etree.ElementTree import ParseError
 
@@ -12,6 +13,7 @@ from langgraph.config import get_stream_writer
 
 from deep_research.agent.config import (
     ARXIV_MAX_RESULTS,
+    EXCERPT_MAX_CHARS,
     LOCAL_FIRST,
     LOCAL_SEARCH_TOP_K,
     MIN_LOCAL_PAPERS,
@@ -21,6 +23,7 @@ from deep_research.agent.sources.models import Source
 from deep_research.agent.sources.rate_limit import ArxivRateLimiter
 from deep_research.persistence.corpus import (
     index_sources,
+    matching_excerpts,
     load_sources,
     strongly_matching_papers,
 )
@@ -132,7 +135,19 @@ def _local_answer(
         ids = strongly_matching_papers(corpus, subtopic, LOCAL_SEARCH_TOP_K)
         if len(ids) < MIN_LOCAL_PAPERS:
             return []
-        return load_sources(corpus, ids)
+        papers = load_sources(corpus, ids)
+        if not EXCERPT_MAX_CHARS:
+            return papers
+        # Attach the full-text passages that matched, so the model reads the paper rather than
+        # only its abstract (D-110). Papers the corpus has not read keep an empty excerpt and
+        # fall back to their abstract in `format_papers`.
+        excerpts = matching_excerpts(corpus, subtopic, ids, EXCERPT_MAX_CHARS)
+        return [
+            replace(paper, excerpt=excerpts[paper.arxiv_id])
+            if paper.arxiv_id in excerpts
+            else paper
+            for paper in papers
+        ]
     except sqlite3.Error:
         return []
 

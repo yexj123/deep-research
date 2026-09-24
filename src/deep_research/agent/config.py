@@ -109,3 +109,14 @@ LOCAL_SEARCH_TOP_K: int = 20
 # cache indefinitely while arXiv moves on. That is reported in the coverage panel (D-105)
 # rather than silently defended against, and the open item says what would settle it.
 LOCAL_FIRST: bool = True
+
+# How much full-text excerpt each paper contributes to the synthesis prompt (D-110).
+#
+# 0 disables excerpts entirely, so the prompt sees abstracts even when the corpus has read the
+# paper -- the switchable baseline that keeps the abstracts-only arm reproducible (D-088).
+#
+# 4000 is two chunks' worth (MAX_CHUNK_CHARS = 2000). The tension is explicit: D-092 measured
+# that pruning to 20 papers cut prompt tokens by 76%, and excerpts spend some of that back.
+# Two passages is enough for a paper to say what it measured without any single paper
+# dominating a 20-paper prompt. The cost is recorded in the arm rather than assumed away.
+EXCERPT_MAX_CHARS: int = 4000

@@ -86,7 +86,13 @@ def format_papers(sources: list[Source], fence: str = "") -> str:
     `tests/agent/test_papers_fence.py` pins the unfenced string byte for byte.
     """
     suffix = f"-{fence}" if fence else ""
-    entries = [f"[arXiv:{source.arxiv_id}] {source.title}\n{source.summary}" for source in sources]
+    # `excerpt or summary`: full-text passages when the corpus has read the paper, the abstract
+    # otherwise (D-110). Every paper without full text is byte-identical to before, which is
+    # what keeps the abstracts-only arm comparable (D-088).
+    entries = [
+        f"[arXiv:{source.arxiv_id}] {source.title}\n{source.excerpt or source.summary}"
+        for source in sources
+    ]
     return f"<papers{suffix}>\n" + "\n\n".join(entries) + f"\n</papers{suffix}>"
 
 
