@@ -2261,6 +2261,68 @@ on a real subtopic: **15,157 characters of abstracts becomes 42,891 with excerpt
 D-092 cut prompt tokens by 76% through pruning; excerpts spend some of that back, and the arm
 records it rather than assuming it away. `0` disables them, keeping the baseline switchable.
 
+### D-111 - Full text measured: 2.8x the prompt, no measurable gain (settles O-13)
+
+**Both arms recorded and scored**, 20 paired questions, with retrieval and synthesis finally
+reading the same text (D-110). Against the abstracts baseline:
+
+| metric | abstracts | full text | delta | SE |
+|---|---|---|---|---|
+| prompt characters (one subtopic) | 15,157 | **42,891** | **2.8x** | - |
+| specificity | 0.78 | 0.79 | +0.01 | +0.9 |
+| numeric_density | 0.51 | 0.72 | +0.21 | +1.0 |
+| faithfulness | 0.99 | 0.97 | -0.02 | **-1.9** |
+| papers cited | 7.90 | 8.30 | +0.40 | +0.6 |
+| papers retrieved | 51.80 | 37.85 | -13.95 | **-8.9** |
+
+**Nothing clears 2 SE in full text's favour.** Faithfulness is nominally *down*. Breadth falls
+27%, because one enriched paper occupies several top-k slots and crowds out distinct papers --
+depth bought at the cost of coverage.
+
+**This is a null from an instrument capable of detecting the effect.** D-093 built specificity
+precisely because faithfulness and relevancy sit at their ceiling, and validated it at 0.95
+concrete against 0.22 vague. Real reviews score ~0.78, so there was room to move. It did not
+move. `numeric_density` -- the metric D-093 predicted would respond first, since abstracts
+rarely state measurements -- rose 41% and stayed inside the noise, with reviews containing no
+numbers at all going 10/20 to 8/20.
+
+**Decision: `EXCERPT_MAX_CHARS = 0`.** Full text is built, measured, and off. Setting it to
+4000 reproduces this arm exactly.
+
+---
+
+**The one effect that does clear 2 SE, and what it is against.** Excerpts beat
+*full-text-informed retrieval with abstracts in the prompt* on numeric_density, 0.25 to 0.72
+(**+2.8 SE**), and recover faithfulness from 0.96 to 0.97. But that comparison is against a
+**broken configuration** -- one this project created by accident and has now made unreachable.
+It validates D-110's diagnosis; it is not an argument for full text.
+
+**So the coupling is enforced in code, not documented as a caution.** With
+`EXCERPT_MAX_CHARS = 0`, `_local_answer` restricts retrieval to the abstract tier. A corpus
+that has read papers in full therefore cannot select on that text while the model reads only
+abstracts -- the pairing that measured *worse than having no full text at all*. Two tests pin
+both halves, because a fix that merely disables full text everywhere is not the same as making
+retrieval and synthesis agree.
+
+---
+
+**What O-13 cost and what it returned.** Roughly 40 minutes of enrichment, ~1 GB of PDFs, four
+recording sweeps and four scoring sweeps. It returns:
+
+- **A negative result on its headline hypothesis**, measured with an instrument built for the
+  purpose and shown to have headroom.
+- **D-110's general finding** -- retrieval and synthesis must read the same text -- which is
+  worth more than the hypothesis was, is not specific to this project, and was only found
+  because an accident produced a configuration nobody would have chosen to test.
+- **A local corpus that pays for itself on its own terms** (D-107): 65 arXiv requests to 1,
+  wall clock down 65%, quality flat. That part stays on.
+
+**The honest framing for the thesis:** three of this project's four headline ideas --
+recursive decomposition (D-094, D-095), deeper search (D-096), and full text (D-111) -- were
+measured and did not improve review quality. The fourth, the local corpus, did pay, in cost
+rather than quality. A system whose own evaluation overturns three of its four premises is a
+more defensible artifact than one that never asked.
+
 ## Open (proposed, not decided)
 
 **Settled 2026-09-20:** O-1 → D-064, O-2 → D-065, O-3 → D-066.
@@ -2821,5 +2883,5 @@ return nothing.
 | **O-12** | **In-band claim checker** | One node, one call; a product feature, not a thesis metric | After O-13 |
 | ~~O-15~~ | ~~Stop reason invisible on a clean run~~ | **Settled → D-099** | ~~Before a demo~~ |
 | **O-16** | **A covered topic never refreshes** | Report only (D-105) until a measured max age exists; the experiment needs time to pass, not compute | When the corpus is months old |
-| **O-13** | **Local-first corpus, BM25 first** | SQLite FTS5, no embedding model; sufficiency counted in distinct *papers*; dense retrieval demoted to a measured follow-on | Milestone 6 |
+| ~~O-13~~ | ~~Local-first corpus, BM25 first~~ | **Settled.** The corpus pays (D-107: 65 arXiv requests to 1, -65% wall clock, quality flat). Full text does not (D-111: 2.8x the prompt, nothing past 2 SE) | ~~Milestone 6~~ |
 | ~~O-14~~ | ~~`MAX_DEPTH` default + a yield-based exit~~ | **Settled → D-096.** Adaptive exits instead of a lower ceiling: −66% searches, quality flat, 19/20 runs stop after one round | ~~Now~~ |

@@ -22,6 +22,7 @@ from deep_research.agent.sources.arxiv import ArxivAPIError, build_search_query,
 from deep_research.agent.sources.models import Source
 from deep_research.agent.sources.rate_limit import ArxivRateLimiter
 from deep_research.persistence.corpus import (
+    ABSTRACT,
     index_sources,
     matching_excerpts,
     load_sources,
@@ -132,7 +133,13 @@ def _local_answer(
     if corpus is None or not LOCAL_FIRST:
         return []
     try:
-        ids = strongly_matching_papers(corpus, subtopic, LOCAL_SEARCH_TOP_K)
+        # **Retrieval must not select on text synthesis will never read** (D-110, D-111).
+        # With excerpts off, restricting to the abstract tier is what makes the harmful
+        # configuration unreachable rather than merely unused: full-text-informed retrieval
+        # feeding abstracts to the model measured faithfulness 0.99 -> 0.96 (-3.1 SE),
+        # because papers were chosen for body text the model never saw and cited anyway.
+        tier = None if EXCERPT_MAX_CHARS else ABSTRACT
+        ids = strongly_matching_papers(corpus, subtopic, LOCAL_SEARCH_TOP_K, tier)
         if len(ids) < MIN_LOCAL_PAPERS:
             return []
         papers = load_sources(corpus, ids)

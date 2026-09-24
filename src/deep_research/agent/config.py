@@ -115,8 +115,21 @@ LOCAL_FIRST: bool = True
 # 0 disables excerpts entirely, so the prompt sees abstracts even when the corpus has read the
 # paper -- the switchable baseline that keeps the abstracts-only arm reproducible (D-088).
 #
-# 4000 is two chunks' worth (MAX_CHUNK_CHARS = 2000). The tension is explicit: D-092 measured
-# that pruning to 20 papers cut prompt tokens by 76%, and excerpts spend some of that back.
-# Two passages is enough for a paper to say what it measured without any single paper
-# dominating a 20-paper prompt. The cost is recorded in the arm rather than assumed away.
-EXCERPT_MAX_CHARS: int = 4000
+# **0 since D-111, which measured it and found it does not pay.** Against the abstracts
+# baseline, 2.8x the prompt characters bought:
+#
+#   specificity      0.78 -> 0.79  (+0.9 SE)   numeric_density  0.51 -> 0.72  (+1.0 SE)
+#   faithfulness     0.99 -> 0.97  (-1.9 SE)   papers retrieved 51.8 -> 37.9  (-8.9 SE)
+#
+# Nothing clears 2 SE in its favour, faithfulness is nominally *down*, and breadth falls 27%
+# because one enriched paper occupies several top-k slots. Specificity had measured headroom
+# (D-093: 0.95 concrete, 0.22 vague) and did not move, so this is a null from an instrument
+# capable of detecting the effect -- not an absent measurement.
+#
+# 4000 (two chunks) is the value the arm was recorded at, so setting it there reproduces
+# D-111 exactly. Raising it spends more of what D-092's pruning saved.
+#
+# **Coupled to the retrieval tier on purpose**: with this at 0, `_local_answer` restricts
+# retrieval to abstracts, because selecting papers on text the model will never read measured
+# *worse* than not having full text at all (D-110).
+EXCERPT_MAX_CHARS: int = 0

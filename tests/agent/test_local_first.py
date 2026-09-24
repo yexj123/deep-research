@@ -205,3 +205,54 @@ async def test_a_malformed_subtopic_fails_the_same_way_with_or_without_the_corpu
     index_sources(corpus, COVERED)
     with pytest.raises(ValueError):
         await _run(corpus, subtopic="what is the")
+
+
+@pytest.mark.asyncio
+async def test_retrieval_uses_abstracts_when_synthesis_will_not_read_full_text(
+    local_first, corpus, monkeypatch
+) -> None:
+    """The harmful configuration must be unreachable, not merely unused (D-110, D-111).
+
+    Selecting papers on body text the model never sees measured faithfulness 0.99 -> 0.96
+    (-3.1 SE): papers were chosen for full-text relevance, handed to the model as abstracts
+    that did not support the topic, and cited anyway. Coupling the tier to
+    `EXCERPT_MAX_CHARS` is what stops that pairing existing.
+    """
+    monkeypatch.setattr(worker_module, "EXCERPT_MAX_CHARS", 0)
+    index_sources(corpus, COVERED)
+    # A paper whose FULL TEXT matches but whose abstract does not mention the query at all.
+    corpus.execute(
+        "INSERT INTO chunks (arxiv_id, tier, section, text) VALUES (?, 'full_text', 'M', ?)",
+        (COVERED[0].arxiv_id, "sparse mixture routing entropy collapse"),
+    )
+    corpus.commit()
+
+    _, requests = await _run(corpus, subtopic="sparse mixture routing")
+
+    assert len(requests) == 1, (
+        "with excerpts off, full-text-only matches must not count as local coverage"
+    )
+
+
+@pytest.mark.asyncio
+async def test_excerpts_reach_the_model_when_enabled(local_first, corpus, monkeypatch) -> None:
+    """The other half of the coupling: with excerpts on, the model reads what was matched.
+
+    Without this the fix could pass by disabling full text everywhere, which is not the same
+    as making retrieval and synthesis agree.
+    """
+    monkeypatch.setattr(worker_module, "EXCERPT_MAX_CHARS", 4000)
+    index_sources(corpus, COVERED)
+    for paper in COVERED:
+        corpus.execute(
+            "INSERT INTO chunks (arxiv_id, tier, section, text) VALUES (?, 'full_text', 'M', ?)",
+            (paper.arxiv_id, "tiling attention kernels measured at 2.1x speedup"),
+        )
+    corpus.commit()
+
+    update, requests = await _run(corpus)
+
+    assert requests == []
+    assert any("2.1x speedup" in paper.excerpt for paper in update["sources"]), (
+        "the passage that matched must be what the model is shown"
+    )
