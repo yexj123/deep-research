@@ -1778,6 +1778,53 @@ now a named constant and the panel phrases that case separately.
 SVG data URI in `index.html` stops the browser requesting it at all -- no route, no binary in
 the repo. Console verified at **0 errors, 0 warnings**, down from 1 error.
 
+### D-100 — The corpus store and its FTS5 retrieval (O-13, first increment)
+
+**What landed.** `persistence/corpus.py` — the schema O-13 specified, abstract indexing, BM25
+retrieval and the sufficiency helper — plus `arxiv.build_fts_query`, the second formatter over
+the existing `search_terms` extraction. **No worker integration and no PDF fetching yet**, so
+agent behaviour is unchanged and every recorded arm stays comparable.
+
+**Why this slice first.** It is the part with no judgement calls left in it: the schema,
+`bm25()` directionality and the sanitization refactor were all locked in the O-13 note before
+any code existed. The parts that still need *measurement* — `MIN_LOCAL_PAPERS`, the top-k, and
+whether full text pays for itself — come after, so they can be measured against a corpus that
+already exists rather than guessed alongside it.
+
+**Four decisions made while building it**, none of which the O-13 note had settled:
+
+1. **`build_fts_query` ORs; `build_search_query` ANDs.** The asymmetry is deliberate. arXiv
+   ANDs to narrow millions of papers (D-051); a personal corpus holds hundreds, so ANDing
+   every term returns nothing and *"not covered"* would mean *"the corpus is small"* rather
+   than *"the corpus lacks this topic"* — making the sufficiency rule measure corpus size.
+   BM25 already ranks multi-term matches above single-term ones, so OR costs no precision at
+   the top of the list; it only stops the tail being truncated to empty.
+
+2. **Chunk text is `title + summary`, not the summary alone.** The method name a search is
+   most likely to use ("FlashAttention", "Mamba") is usually in the title and only paraphrased
+   in the abstract. Verified: a summary-only index misses `FlashAttention` entirely.
+
+3. **`section` is `NOT NULL DEFAULT ''`, not nullable.** SQLite permits unlimited NULLs in a
+   unique index, so a nullable `section` would let `UNIQUE(arxiv_id, tier, section)` pass while
+   the same abstract was indexed repeatedly. That is a *correctness* bug, not tidiness: BM25
+   would then rank a paper highly for having been **found often** rather than for matching the
+   query, and nothing would look wrong.
+
+4. **The module is synchronous.** These are microsecond queries on a local file, and staying
+   sync keeps it pure and testable — the choice `agent/ranking.py` already makes. A caller
+   inside the event loop that finds them slow should use `asyncio.to_thread` rather than
+   making the module async.
+
+**What the tests pin**, chosen for failure modes that are silent rather than loud: `bm25()`
+ascending is best-first and relevance never escapes negative; re-indexing is idempotent;
+sufficiency counts distinct *papers* (a ten-chunk full-text paper is one paper of coverage,
+not ten); the tier filter isolates an abstracts-only arm; and six hostile subtopic forms
+cannot break the query — with a **control test** proving the raw form really would have raised
+`OperationalError`, so the defence is not being asserted against something harmless.
+
+**Still open, and deliberately unmeasured:** `MIN_LOCAL_PAPERS` and the top-k. Choosing them
+by intuition would be `recursion_limit = 150` again (D-077).
+
 ## Open (proposed, not decided)
 
 **Settled 2026-09-20:** O-1 → D-064, O-2 → D-065, O-3 → D-066.

@@ -15,7 +15,7 @@ writing it here is a down payment rather than a detour.
 import sqlite3
 from collections.abc import Sequence
 
-from deep_research.agent.sources.arxiv import search_terms
+from deep_research.agent.sources.arxiv import build_fts_query
 from deep_research.agent.sources.models import Source
 
 _SCHEMA = """
@@ -69,7 +69,7 @@ def rank_sources(
         return list(sources)
 
     try:
-        query = " OR ".join(search_terms(question))
+        query = build_fts_query(question)
     except ValueError:
         # A question of only stopwords cannot rank anything. decompose filters these before
         # dispatch (D-073), so reaching here means ranking has nothing to go on -- not that

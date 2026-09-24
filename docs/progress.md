@@ -46,6 +46,27 @@ Backed by `CLAUDE.md`, the output style, and `Edit(/tests/**)`, `Edit(/docs/**)`
 - [ ] **`notebooks/`: measure ungrounded citations against depth** (D-079, Open) — the three
       depth arms now exist, so this is a re-score of recorded data rather than new runs
 
+## Milestone 6 (O-13) started: the corpus store (D-100)
+
+**Landed:** `persistence/corpus.py` — the schema O-13 specified, abstract indexing, BM25
+retrieval, the sufficiency helper and staleness stats — plus `arxiv.build_fts_query`, the
+second formatter over the existing `search_terms` extraction. 29 new tests, 573 total.
+
+**Deliberately not yet:** worker integration and PDF fetching. Agent behaviour is unchanged,
+so every recorded arm stays comparable and the corpus can be measured against rather than
+guessed alongside.
+
+**Next, in order:**
+1. **Wire the corpus into `research_worker`** — index every search result on the way through,
+   which is free and makes the corpus useful from the first run. Still no behaviour change:
+   indexing only.
+2. **Measure `MIN_LOCAL_PAPERS` and top-k** before letting the corpus *answer* a subtopic.
+   These are the two numbers O-13 says must not be guessed (D-077's lesson).
+3. **Local-first retrieval** in the worker, augmenting rather than replacing on fallback.
+4. **Full text** — the tier that O-13's comparison actually tests, and the one D-093 predicts
+   should move `numeric_density` first (five of ten reviews currently contain no numbers).
+5. **Staleness in the coverage panel** — now cheap, since D-099 made that panel unconditional.
+
 ## /demo-check, 2026-09-24 — passed, with two cosmetic findings
 
 Two real runs through the HTTP route plus a sidebar replay, on a clean server start.

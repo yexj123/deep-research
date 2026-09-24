@@ -8,9 +8,11 @@ from defusedxml import DefusedXmlException, DTDForbidden
 
 from deep_research.agent.sources.arxiv import (
     ArxivAPIError,
+    build_fts_query,
     build_search_query,
     parse_feed,
     search_arxiv,
+    search_terms,
     split_versioned_id,
 )
 from tests.agent.fakes import load_arxiv_fixture, make_arxiv_stub
@@ -195,3 +197,63 @@ async def test_search_arxiv_raises_on_http_400() -> None:
     async with stub.client:
         with pytest.raises(httpx.HTTPStatusError):
             await search_arxiv(stub.client, "all:attention", 3)
+
+
+# ---- build_fts_query: the second formatter over one extraction (O-13) ----------------
+
+
+def test_fts_query_ors_the_terms() -> None:
+    """OR, not AND, and the asymmetry against arXiv is deliberate (O-13).
+
+    arXiv ANDs to narrow millions of papers (D-051). A personal corpus holds hundreds, so
+    ANDing every term returns nothing and "not covered" would mean "the corpus is small"
+    rather than "the corpus lacks this topic" -- which would make the sufficiency rule
+    measure corpus size instead of coverage.
+    """
+    assert build_fts_query("What is attention in transformer models?") == (
+        "attention OR transformer OR models"
+    )
+
+
+def test_both_formatters_share_one_extraction() -> None:
+    """The property that makes "the corpus does not cover this" mean something (O-13).
+
+    If the two backends cleaned differently, a local miss might only mean they disagreed about
+    what was being asked, and the sufficiency test would be measuring that disagreement.
+    """
+    question = "How do Mixture-of-Experts models scale?"
+    terms = search_terms(question)
+    assert build_fts_query(question) == " OR ".join(terms)
+    assert build_search_query(question) == " AND ".join(f"all:{t}" for t in terms)
+
+
+def test_fts_query_strips_the_operators_that_crash_fts5() -> None:
+    """Symbolic FTS5 operators must not survive into a MATCH string (O-13).
+
+    An unstripped quote raises `OperationalError: unterminated string` and crashes the query;
+    a surviving `:` would allow a `column:` filter.
+    """
+    built = build_fts_query('"attention" (transformer) text:model atten*')
+    for symbol in ('"', "(", ")", ":", "*"):
+        assert symbol not in built, f"{symbol!r} survived into {built!r}"
+
+
+def test_fts_query_lowercases_the_word_operators() -> None:
+    """Lowercasing is a security property here, not normalization (O-13).
+
+    FTS5's word operators are case-sensitive: `attention AND transformer` is an operator
+    expression, `attention and transformer` is ordinary terms. Anyone "improving" this by
+    preserving the planner's capitalization would silently reintroduce operator injection with
+    nothing failing -- which is exactly what this test exists to prevent.
+    """
+    built = build_fts_query("attention NOT transformer NEAR encoder")
+    assert "NOT" not in built and "NEAR" not in built
+    assert "not" in built.split(" OR ") and "near" in built.split(" OR ")
+
+
+def test_fts_query_rejects_a_question_of_only_stopwords() -> None:
+    """Fails loudly rather than issuing an empty MATCH (D-023, D-059)."""
+    import pytest as _pytest
+
+    with _pytest.raises(ValueError, match="no meaningful terms"):
+        build_fts_query("what is the")

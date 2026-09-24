@@ -77,6 +77,30 @@ def build_search_query(question: str) -> str:
     return " AND ".join(f"all:{term}" for term in search_terms(question))
 
 
+def build_fts_query(question: str) -> str:
+    """Turn the user's question into a SQLite FTS5 MATCH string (O-13).
+
+    "What is attention in transformer models?" -> "attention OR transformer OR models"
+
+    The second formatter over the same `search_terms` extraction, so the local corpus and
+    arXiv are fed by one cleaning step. That shared step is what makes "the corpus does not
+    cover this subtopic" mean something: if the two tiers sanitized differently, a local miss
+    might only mean the two backends disagreed about what was being asked.
+
+    **OR, not AND, and the asymmetry is deliberate.** arXiv ANDs because it searches millions
+    of papers and needs narrowing (D-051). A personal corpus holds hundreds, so ANDing every
+    term returns nothing and "not covered" would mean "the corpus is small", not "the corpus
+    lacks this topic". BM25 already ranks documents matching more terms above those matching
+    fewer, so OR loses no precision at the top of the list -- it only stops the tail being
+    truncated to empty.
+
+    Safety comes entirely from `search_terms`: punctuation stripping removes every symbolic
+    FTS5 operator (`"` `*` `(` `)` `:` `^`) and lowercasing neutralizes the word operators
+    AND, OR, NOT and NEAR. Raises ValueError on a question of only stopwords, like its sibling.
+    """
+    return " OR ".join(search_terms(question))
+
+
 def split_versioned_id(entry_id: str) -> tuple[str, int]:
     """Split an entry <id> into (canonical ID, version).
 
