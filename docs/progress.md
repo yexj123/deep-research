@@ -33,7 +33,7 @@ Backed by `CLAUDE.md`, the output style, and `Edit(/tests/**)`, `Edit(/docs/**)`
 - [ ] **Review D-096's `src/` changes** — `agent/exits.py` (new), plus the edits to `graph.py`,
       `coverage.py`, `state.py` and `decompose.py`. Written at your instruction rather than
       proposed, so it is the one part of `src/` you have not defended line by line yet
-- [x] **O-8 / D-097 — the nonce fence** (`pending`) — `new_fence`, `system_prompt(fence)` and
+- [x] **O-8 / D-097 — the nonce fence** (`6693e44`) — `new_fence`, `system_prompt(fence)` and
       `format_papers(sources, fence="")` in `synthesize.py`; 14 tests green, 538 total
 - [ ] **Run `/demo-check` yourself** — Claude cannot invoke it. Milestone 5's last unticked
       box, and D-096 changed what the coverage panel says, so the new sentence has never been
