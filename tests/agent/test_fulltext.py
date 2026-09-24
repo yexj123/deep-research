@@ -273,3 +273,31 @@ def test_an_oversized_paragraph_is_cut_rather_than_emitted_whole() -> None:
     chunks = chunk_paper("1 Method\n\n" + "x " * (MAX_CHUNK_CHARS * 2))
     assert len(chunks) > 1
     assert max(len(chunk.text) for chunk in chunks) <= MAX_CHUNK_CHARS
+
+
+def test_unpaired_surrogates_are_removed(  ) -> None:
+    """pypdf emits lone surrogates for some glyphs, and SQLite cannot store them (D-109).
+
+    Found the hard way: one mathematical-bold character in one PDF raised
+    `UnicodeEncodeError` on insert and killed a 360-paper enrichment pass at paper 126 --
+    an hour of rate-limited downloading lost to one glyph. Bad external data must become
+    data, never an exception that takes down the run (D-053).
+    """
+    from deep_research.agent.sources.fulltext import _drop_surrogates
+
+    cleaned = _drop_surrogates("bold \ud835 math and \ud83d more")
+    assert "\ud835" not in cleaned
+    assert cleaned.encode("utf-8"), "the result must be storable"
+    assert "bold" in cleaned and "math" in cleaned, "surrounding text must survive"
+
+
+def test_real_unicode_is_not_collateral_damage() -> None:
+    """Stripping surrogates must not strip legitimate non-ASCII.
+
+    D-063 already cost this project a bug where cleaning destroyed non-ASCII terms; author
+    names and titles routinely carry accents and CJK, and losing them would make those papers
+    unsearchable by the very words that identify them.
+    """
+    from deep_research.agent.sources.fulltext import _drop_surrogates
+
+    assert _drop_surrogates("naïve café 東京 Müller") == "naïve café 東京 Müller"

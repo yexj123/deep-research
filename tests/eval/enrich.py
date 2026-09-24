@@ -22,6 +22,7 @@ waiting on.
 
 import argparse
 import asyncio
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -101,11 +102,19 @@ async def enrich(limit: int | None, corpus_path: Path = CORPUS_PATH) -> None:
                         db, arxiv_id, [(chunk.section, chunk.text) for chunk in chunks]
                     )
                     print(f"  {index:>4}/{len(todo)}  {arxiv_id}  {added:>3} chunks")
-                except FullTextError as exc:
-                    # A withdrawn paper, a scan, a transport blip. Data, not a bug (D-053):
-                    # the corpus simply has no full text for it, and the pass continues.
+                except (FullTextError, UnicodeError, sqlite3.DatabaseError) as exc:
+                    # A withdrawn paper, a scan, a transport blip, a glyph that will not
+                    # encode. Data, not a bug (D-053): the corpus has no full text for that
+                    # paper and the pass continues.
+                    #
+                    # UnicodeError is listed because leaving it out cost 235 papers. One PDF
+                    # rendered a mathematical-bold glyph as a lone surrogate, SQLite refused
+                    # it, and the whole pass died at paper 126 -- an hour of rate-limited
+                    # downloading lost to one character. `extract_text` now strips those
+                    # (D-109), so this is the second line of defence rather than the first,
+                    # and it is here because a long unattended pass must degrade per-paper.
                     failures += 1
-                    print(f"  {index:>4}/{len(todo)}  {arxiv_id}  SKIPPED: {exc}")
+                    print(f"  {index:>4}/{len(todo)}  {arxiv_id}  SKIPPED: {type(exc).__name__}: {exc}")
 
         print(f"\nfailed: {failures}/{len(todo)}")
         print(f"corpus: {stats(db)}")

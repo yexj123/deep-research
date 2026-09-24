@@ -116,7 +116,29 @@ def extract_text(pdf: bytes) -> str:
 
     if not text.strip():
         raise FullTextError("PDF yielded no text layer (scanned or malformed)")
-    return text
+    return _drop_surrogates(text)
+
+
+def _drop_surrogates(text: str) -> str:
+    """Remove lone surrogates, which are extraction artifacts and cannot be stored.
+
+    **Found the hard way (D-109).** pypdf renders some glyphs -- mathematical bold, certain
+    ligatures -- as unpaired surrogates like `\\ud835`. Python holds those in a `str` happily,
+    but they are not encodable UTF-8, so SQLite raises `UnicodeEncodeError` on insert. That
+    killed an entire 360-paper enrichment pass at paper 126: **one malformed glyph in one PDF
+    cost every paper after it**, which is precisely the shape D-053 exists to prevent -- bad
+    external data must become data, never an exception that takes down the run.
+
+    Dropped rather than replaced with U+FFFD: these are decoding noise carrying no meaning, and
+    a replacement character would be an indexable token that matches nothing and appears in
+    any excerpt shown to a reader.
+
+    The fast path costs one `str.isascii()` check, so the overwhelming majority of papers pay
+    almost nothing for it.
+    """
+    if text.isascii():
+        return text
+    return text.encode("utf-8", "surrogatepass").decode("utf-8", "ignore")
 
 
 def split_sections(text: str) -> list[tuple[str, str]]:
