@@ -49,7 +49,7 @@
     "model": "gpt-4o",
     "max_depth": 2,
     "max_subtopics": 3,
-    "retrieval_unit": "fulltext-local",
+    "retrieval_unit": "ftretrieval-local",
     "synthesis_top_n": 20,
     "question_set": "broad",
     "exit_rule": "adaptive"

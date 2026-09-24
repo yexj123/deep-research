@@ -2205,6 +2205,62 @@ was an artifact of **enrichment order**: the pass works through papers in record
 order, so early questions were enriched and later ones were not. The number measured progress,
 not bias. Worth recording because a partial-run measurement looks exactly like a finished one.
 
+### D-110 - Retrieval and synthesis must read the same text
+
+**The first full-text arm did not test full text, and the number proves it.** `load_sources`
+returns `Source` objects whose `summary` is the abstract, so full text changed only *which
+papers retrieval found* -- the review still read abstracts. The recordings said so plainly:
+context entries averaged **1390 characters against the abstract arm's 1326**, the same text.
+It was noticed only because `papers_retrieved` fell unexpectedly (51.8 to 39.8) and that
+needed explaining.
+
+**Scored anyway, because the accident turned out to be informative.** Renamed
+`ftretrieval-local` -- full-text-*informed retrieval*, abstracts in the prompt:
+
+| metric | abstracts | ft-retrieval | delta | SE |
+|---|---|---|---|---|
+| **faithfulness** | **0.99** | **0.96** | **-0.03** | **-3.1** |
+| numeric_density | 0.51 | 0.25 | -0.26 | -1.2 |
+| specificity | 0.78 | 0.78 | +0.00 | +0.1 |
+| papers cited | 7.90 | 7.85 | -0.05 | -0.1 |
+| papers retrieved | 51.80 | 39.80 | -12.00 | -6.2 |
+
+**Faithfulness clears 2 SE in the harmful direction** -- the first metric in this whole
+evaluation to do so. The mechanism follows directly from the gap: retrieval selected papers
+whose *body* matched the query, then handed the model only their *abstracts*, which do not
+support the topic the paper was selected for. The model cited them anyway.
+
+**The finding is general and worth more than the arm: retrieval and synthesis must see the
+same text.** A retriever that selects on evidence the writer never reads produces sources that
+look relevant to the machine and do not support the claim for the reader. That is this
+project's recurring failure shape -- confident output, less support than it appears -- arriving
+in the one place nobody had looked for it.
+
+`papers_retrieved` falling is the same mechanism seen from the other side: `covering_papers`
+deduplicates by paper, so one enriched paper occupying several chunk slots in the top-k
+crowds out distinct papers. Full text buys depth per paper at the cost of breadth.
+
+---
+
+**The fix.** `Source` gains an `excerpt` field rather than overwriting `summary`. The abstract
+is what arXiv published and stays what it says; `excerpt` is what *this query* found inside the
+paper. A `Source` whose `summary` silently became something else would be a record that lies
+about its own provenance, and empty is the honest default for every paper the corpus has only
+seen the abstract of.
+
+`matching_excerpts` picks each paper's best passages by the same BM25 ranking as everything
+else, so a paper contributes the part of itself that answers *this* query rather than its
+opening paragraphs. Passages carry their section label: "the Results section says 2.1x" is a
+stronger claim for a reader, and for O-12's claim checker, than an unattributed sentence.
+
+`format_papers` uses `excerpt or summary`, so every paper without full text stays byte
+identical and the abstracts-only arm remains comparable (D-088).
+
+**The cost is stated, not hidden.** `EXCERPT_MAX_CHARS = 4000` is two chunks' worth. Measured
+on a real subtopic: **15,157 characters of abstracts becomes 42,891 with excerpts, 2.8x**.
+D-092 cut prompt tokens by 76% through pruning; excerpts spend some of that back, and the arm
+records it rather than assuming it away. `0` disables them, keeping the baseline switchable.
+
 ## Open (proposed, not decided)
 
 **Settled 2026-09-20:** O-1 → D-064, O-2 → D-065, O-3 → D-066.
