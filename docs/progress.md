@@ -56,10 +56,14 @@ second formatter over the existing `search_terms` extraction. 29 new tests, 573 
 so every recorded arm stays comparable and the corpus can be measured against rather than
 guessed alongside.
 
+**Also landed (D-101):** the worker now seeds the corpus. Every search result is indexed on
+the way through, `build_graph` takes an optional `corpus`, and the API lifespan supplies one on
+the same SQLite file as the checkpoints. Verified end to end: one real run through the HTTP
+route leaves **3 papers, 3 chunks**. Nothing *reads* the corpus yet, so the review is still
+written from exactly the same papers as before.
+
 **Next, in order:**
-1. **Wire the corpus into `research_worker`** — index every search result on the way through,
-   which is free and makes the corpus useful from the first run. Still no behaviour change:
-   indexing only.
+1. ~~Wire the corpus into `research_worker`~~ — **done (D-101)**.
 2. **Measure `MIN_LOCAL_PAPERS` and top-k** before letting the corpus *answer* a subtopic.
    These are the two numbers O-13 says must not be guessed (D-077's lesson).
 3. **Local-first retrieval** in the worker, augmenting rather than replacing on fallback.

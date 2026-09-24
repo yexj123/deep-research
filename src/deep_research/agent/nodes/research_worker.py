@@ -1,6 +1,7 @@
 """research_worker node: one arXiv search per subtopic, run in parallel via Send (D-072)."""
 
-from collections.abc import Awaitable, Callable
+import sqlite3
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Any, TypedDict
 from xml.etree.ElementTree import ParseError
 
@@ -11,7 +12,9 @@ from langgraph.config import get_stream_writer
 
 from deep_research.agent.config import ARXIV_MAX_RESULTS
 from deep_research.agent.sources.arxiv import ArxivAPIError, build_search_query, search_arxiv
+from deep_research.agent.sources.models import Source
 from deep_research.agent.sources.rate_limit import ArxivRateLimiter
+from deep_research.persistence.corpus import index_sources
 
 
 class SubtopicTask(TypedDict):
@@ -60,10 +63,54 @@ def _is_external_status(exc: httpx.HTTPStatusError) -> bool:
     return status == 429 or status >= 500
 
 
+def _index_into_corpus(
+    corpus: sqlite3.Connection | None,
+    sources: Sequence[Source],
+    subtopic: str,
+    writer: Callable[[dict[str, Any]], None],
+) -> None:
+    """Index this search's abstracts, if a corpus was supplied (O-13, D-101).
+
+    **Free.** These abstracts were already fetched and paid for; without this they are used
+    once and discarded. Indexing them is what makes the corpus useful from the first run
+    rather than after a bulk-download phase.
+
+    **Why a corpus write must not fail a subtopic**, and why the catch is narrow. The search
+    already succeeded: the papers are in hand and the run can complete without ever touching
+    the corpus, so a locked or full database is not a reason to mark the subtopic failed and
+    burn one of its two retries (D-020). That is the same reasoning as `_progress_writer` --
+    storage is additive, like reporting. But the catch is `sqlite3.Error` only: a `TypeError`
+    from a malformed `Source` is a *bug* and must crash loudly (D-023).
+
+    **The failure is reported, not swallowed.** A corpus that silently stops filling is this
+    project's recurring shape (D-062, D-069, O-5): everything looks fine, and months later the
+    local tier is empty for no visible reason.
+
+    **Synchronous on purpose, and that is what makes it safe here.** Workers run in parallel
+    under `Send`, sharing one connection. Because `index_sources` contains no `await`, the
+    event loop cannot interleave two of them, so the writes are effectively atomic. Making
+    this async would introduce exactly the interleaving it currently cannot have.
+    """
+    if corpus is None or not sources:
+        return
+    try:
+        index_sources(corpus, sources)
+    except sqlite3.Error as exc:
+        writer({"status": f"Could not index results for {subtopic!r} ({exc})"})
+
+
 def make_research_worker(
-    http_client: httpx.AsyncClient, limiter: ArxivRateLimiter
+    http_client: httpx.AsyncClient,
+    limiter: ArxivRateLimiter,
+    corpus: sqlite3.Connection | None = None,
 ) -> WorkerNode:
-    """Build the worker with its client and limiter captured in a closure (D-032, D-049, D-064)."""
+    """Build the worker with its client, limiter and corpus in a closure (D-032, D-049, D-064).
+
+    `corpus=None` disables indexing entirely, which keeps today's behaviour reproducible from
+    this same codebase rather than from git history -- the switchable-parameter pattern D-091
+    used for `SYNTHESIS_TOP_N`, and what lets a no-corpus arm be recorded against a corpus arm
+    with one variable changing (D-088).
+    """
 
     async def research_worker(task: SubtopicTask) -> dict[str, Any]:
         subtopic = task["subtopic"]
@@ -95,6 +142,10 @@ def make_research_worker(
                 else f"No papers found for {subtopic!r}"
             }
         )
+
+        # After the progress report and before the state update: the papers are already in
+        # hand, so nothing here can change what this subtopic contributes to the run.
+        _index_into_corpus(corpus, result.sources, subtopic, writer)
 
         update: dict[str, Any] = {
             "sources": list(result.sources),

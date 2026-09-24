@@ -333,8 +333,9 @@ imports still point downward (rule 1).
 `ABSTRACT` / `FULL_TEXT` tier constants.
 **Uses:** `sources/models.Source`, `sqlite3`. No new dependency — FTS5 is in the bundled
 SQLite (3.49.1).
-**Used by:** nothing yet. The worker integration is the next O-13 increment; landing the store
-first keeps agent behaviour unchanged and every recorded arm comparable.
+**Used by:** `nodes/research_worker.py` (indexes each search's results, D-101) and
+`api/main.py`'s lifespan, which opens it on the same file as the checkpoints (D-007). Nothing
+*reads* it yet -- local-first retrieval is the next increment.
 
 **Two things to know before editing it.** `bm25()` returns the *negative* of the standard
 score, so `ORDER BY bm25(t)` ascending is best-first and `DESC` silently returns the worst
@@ -468,6 +469,7 @@ Claude writes and maintains every file here (since 2026-09-19; see `CLAUDE.md`).
 | `api/test_pages.py` [M5] | The page and its assets are served, and the history fragment escapes the question (D-080, D-085) | `create_app` |
 | `agent/test_gap_check.py` [M4] | The stopping rule as a pure function: depth accounting, and the two exits (D-075, D-076) | `gap_check`, `route_after_gap_check` |
 | `agent/test_papers_fence.py` [D-097] | The `<papers>` block cannot be closed by its own contents: hostile titles and abstracts, the fence being unguessable and per-run, the prompt naming the same token, and the *unfenced* form staying byte-identical for the eval recorder | `format_papers`, `new_fence`, `system_prompt` |
+| `agent/test_worker_indexing.py` [D-101] | The worker seeds the corpus, idempotently across subtopics; `corpus=None` behaves exactly as before; a broken corpus does **not** fail the subtopic but **is** reported on the progress stream; and a TypeError in indexing still crashes | `make_research_worker`, `persistence/corpus` |
 | `agent/test_corpus.py` [D-100] | Indexing, BM25 retrieval and the traps: ascending-is-best-first, relevance never negative, idempotent re-indexing, sufficiency counting distinct papers rather than chunks, the tier filter, and six hostile subtopics that cannot break the query — with a control proving the raw form would have raised | `persistence/corpus`, `build_fts_query` |
 | `agent/test_exits.py` [D-096] | That routing and reporting can never disagree: each of the four exits fires on a state built for it, the router stops whenever any fires, and the coverage panel names the one that actually did. Exists because that invariant broke twice (D-094, D-096) | `exit_reason`, `describe`, `summarize_coverage`, `route_after_gap_check` |
 | `agent/test_adaptive_exit.py` [D-096] | The two measured exits: stop when the prompt is already full (`SYNTHESIS_TOP_N` reached) and when most of a round's searches came back empty. Includes the boundary in the direction that costs quality, the per-round baseline that stops cumulative empties latching the exit on, and the thin-question case that must still get its second round | `route_after_gap_check`, `make_source` |

@@ -18,6 +18,7 @@ from deep_research.agent.llm import ModelFactory, get_chat_model
 from deep_research.agent.sources.rate_limit import ArxivRateLimiter
 from deep_research.api.routes import pages, runs
 from deep_research.persistence.checkpointer import open_checkpointer
+from deep_research.persistence.corpus import connect as corpus_connect
 from deep_research.persistence.runs import init_runs_table
 
 DEFAULT_DB_PATH = str(Path("deep_research.sqlite").resolve())
@@ -35,15 +36,25 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """
     async with open_checkpointer(app.state.db_path) as (checkpointer, conn):
         await init_runs_table(conn)
-        async with httpx.AsyncClient(timeout=ARXIV_TIMEOUT_SECONDS) as http_client:
-            app.state.conn = conn
-            app.state.graph = build_graph(
-                app.state.model_factory,
-                app.state.http_client or http_client,
-                app.state.limiter or ArxivRateLimiter(ARXIV_MIN_INTERVAL_SECONDS),
-                checkpointer,
-            )
-            yield
+        # The corpus lives in the same file as the checkpoints and the runs table (D-007), on
+        # its own synchronous connection: the corpus module is sync by design (D-100), and
+        # mixing it into the aiosqlite connection would mean an async wrapper around
+        # microsecond queries for nothing. Closed with the app, like the others.
+        corpus = corpus_connect(app.state.db_path)
+        try:
+            async with httpx.AsyncClient(timeout=ARXIV_TIMEOUT_SECONDS) as http_client:
+                app.state.conn = conn
+                app.state.corpus = corpus
+                app.state.graph = build_graph(
+                    app.state.model_factory,
+                    app.state.http_client or http_client,
+                    app.state.limiter or ArxivRateLimiter(ARXIV_MIN_INTERVAL_SECONDS),
+                    checkpointer,
+                    corpus,
+                )
+                yield
+        finally:
+            corpus.close()
 
 
 def create_app(

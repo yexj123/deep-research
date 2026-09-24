@@ -14,6 +14,8 @@ synthesis context (D-096). `agent/exits.py` holds the four conditions and is the
 they are defined.
 """
 
+import sqlite3
+
 import httpx
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
@@ -109,19 +111,26 @@ def build_graph(
     http_client: httpx.AsyncClient,
     limiter: ArxivRateLimiter,
     checkpointer: BaseCheckpointSaver,
+    corpus: sqlite3.Connection | None = None,
 ) -> CompiledStateGraph:
     """Compile the research graph with its dependencies passed in (D-032, D-049, D-064).
 
-    The caller owns all four. Tests pass a fake factory, an httpx.MockTransport client, a
+    The caller owns all of them. Tests pass a fake factory, an httpx.MockTransport client, a
     zero-delay limiter and a fresh InMemorySaver; the web layer will pass get_chat_model, one
     shared httpx.AsyncClient, one ArxivRateLimiter and AsyncSqliteSaver. Checkpointers are
     built with serde=build_serializer() (D-014).
+
+    `corpus` is optional and defaults to off (O-13, D-101). With a connection, every search
+    result is indexed on the way through -- free, since those abstracts were already fetched.
+    Without one, behaviour is exactly as before, so the no-corpus arm stays reproducible from
+    this codebase rather than from git history (the D-091 pattern). The eval recorder passes
+    nothing, which is what keeps the 80 committed recordings comparable.
     """
     builder = StateGraph(ResearchState, context_schema=RunContext)
 
     builder.add_node("intake", intake)
     builder.add_node("decompose", make_decompose(model_factory))
-    builder.add_node("research_worker", make_research_worker(http_client, limiter))
+    builder.add_node("research_worker", make_research_worker(http_client, limiter, corpus))
     builder.add_node("gap_check", gap_check)
     builder.add_node("synthesize", make_synthesize(model_factory))
     builder.add_node("check_citations", check_citations)

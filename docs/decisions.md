@@ -1825,6 +1825,51 @@ cannot break the query — with a **control test** proving the raw form really w
 **Still open, and deliberately unmeasured:** `MIN_LOCAL_PAPERS` and the top-k. Choosing them
 by intuition would be `recursion_limit = 150` again (D-077).
 
+### D-101 — The worker seeds the corpus (O-13, second increment)
+
+**What landed.** `research_worker` indexes every search result on the way through, and
+`build_graph` grows an optional `corpus` argument that the API lifespan now supplies. Verified
+end to end: one real run through the HTTP route leaves **3 papers, 3 chunks** in the corpus.
+
+**Still no behaviour change.** Nothing *reads* the corpus yet — the review is written from the
+same papers as before. That is the point: the corpus has to exist and fill before
+`MIN_LOCAL_PAPERS` and the top-k can be measured rather than guessed (D-077's lesson).
+
+**Why indexing here is free.** These abstracts were already fetched and paid for by a search
+the run needed anyway. Without this they are used once and discarded, and the corpus would
+require a bulk-download phase before it was useful at all.
+
+**Three decisions, all about failure:**
+
+1. **A corpus write must never fail a subtopic.** The search already succeeded and the papers
+   are in hand; the run completes fine having never touched the corpus. Marking the subtopic
+   failed would burn one of its two retries (D-020) and drop it from the review — turning a
+   disk problem into missing research. Same reasoning as `_progress_writer`: storage, like
+   reporting, is strictly additive.
+
+2. **But the catch is `sqlite3.Error` only.** A `TypeError` from a malformed `Source` is a bug
+   and must crash (D-023). A blanket `except Exception` would turn it into a progress message
+   and hide it for as long as the corpus appeared to work.
+
+3. **And the failure is reported, not swallowed.** A corpus that silently stops filling is
+   this project's recurring shape arriving somewhere new (D-062, D-069, O-5): nothing looks
+   wrong, and months later the local tier is mysteriously empty. It goes to `custom` progress
+   rather than state, because it is an infrastructure problem, not a research finding.
+
+**`corpus=None` is the baseline arm, not a convenience default.** The eval recorder passes
+nothing, which is exactly what keeps the 80 committed recordings comparable to anything
+recorded after the corpus lands — the switchable-parameter pattern D-091 used for
+`SYNTHESIS_TOP_N` (D-088).
+
+**A concurrency property worth stating, because it is load-bearing and invisible.** Workers
+run in parallel under `Send`, sharing one connection. `index_sources` contains no `await`, so
+the event loop cannot interleave two of them and the writes are effectively atomic. **Making
+the corpus module async would introduce exactly the interleaving it currently cannot have** —
+which is a second, stronger reason for D-100's sync decision than the one recorded there.
+
+**Lifetime:** the corpus opens on its own synchronous connection to the same file as the
+checkpoints and the runs table (D-007), and closes in a `finally` alongside them.
+
 ## Open (proposed, not decided)
 
 **Settled 2026-09-20:** O-1 → D-064, O-2 → D-065, O-3 → D-066.
