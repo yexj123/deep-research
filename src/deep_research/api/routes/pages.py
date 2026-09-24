@@ -61,7 +61,8 @@ async def run_view(request: Request, thread_id: str) -> HTMLResponse:
             "run": run,
             "status": (await get_run_state(graph, thread_id)).value,
             "review_html": render_review(review) if review else "",
-            "coverage_html": "" if coverage.is_complete else render_coverage(coverage),
+            # Always rendered since O-15 -- see the note in routes/runs.py.
+            "coverage_html": render_coverage(coverage),
             "citation_violations": values.get("citation_violations", []),
         },
     )

@@ -1739,6 +1739,45 @@ leaving headroom.
 measured results. They are in the log at the same level of confidence they deserve, which is
 lower than D-094's or D-095's.
 
+### D-099 — The stop reason is always shown; the loss list stays conditional (settles O-15)
+
+**Decision.** `render_coverage` is called unconditionally at both call sites
+(`routes/runs.py`, `routes/pages.py`). The `is_complete` gate moves *inside* the panel, where
+it now chooses the heading -- "Coverage" for a clean run, "Coverage and limitations" when
+something was lost -- rather than deciding whether the panel exists at all.
+
+**Why it changed.** D-086 hid the panel when nothing was lost, which was right while it only
+ever listed losses. **D-096 changed what it has to say.** Runs now stop after a single round,
+and a reader who watches three searches and then synthesis has no way to learn why it did not
+go deeper. The sentence existed, was tested, and was never shown -- on precisely the runs that
+provoke the question. Found by `/demo-check`, not by any test, because every test asserted the
+gate rather than asking what a person would see.
+
+On a clean run the panel now reads:
+
+> **Coverage** — Searched 3 subtopic(s) over 1 round(s), finding 30 paper(s). The run stopped
+> because enough papers were found to fill the synthesis context, so further rounds could only
+> have changed which papers were used, not how many.
+
+That is the answer to "why only one round?", which is the first thing a judge asks about the
+project's headline feature.
+
+**The distinction this draws, which D-086 conflated:** *what a run covered* is information for
+every run; *what it lost* is information only when there is some. One panel, two rules.
+
+**Rejected:** showing the panel only when the stop reason is *not* the depth ceiling
+(backwards -- the ceiling is the case a reader most needs to see), and leaving it (the feature
+most in need of explanation would have none in the UI).
+
+**One nonsense case had to be handled first.** `exits.describe(None, ...)` returns "the run has
+not finished" for an interrupted run, which would have rendered as "The run stopped because the
+run has not finished." Harmless while hidden; on screen once unconditional. `NOT_FINISHED` is
+now a named constant and the panel phrases that case separately.
+
+**Also fixed, cosmetic:** `/favicon.ico` 404'd, the only console error on the page. An inline
+SVG data URI in `index.html` stops the browser requesting it at all -- no route, no binary in
+the repo. Console verified at **0 errors, 0 warnings**, down from 1 error.
+
 ## Open (proposed, not decided)
 
 **Settled 2026-09-20:** O-1 → D-064, O-2 → D-065, O-3 → D-066.
@@ -2239,7 +2278,8 @@ return nothing.
 
 ---
 
-- **O-15 — the stop reason is invisible on a clean run.** Found by `/demo-check` on
+- ~~**O-15 — the stop reason is invisible on a clean run.**~~ **Settled 2026-09-24 → D-099.**
+  Option A was taken. Original note kept for the reasoning. Found by `/demo-check` on
   2026-09-24. `runs.py:145` and `pages.py:64` send `coverage_html` only when
   `coverage.is_complete` is false — D-086's choice, so a clean run is not cluttered with a
   list of nothing. That was right when the panel only ever reported *losses*.
@@ -2275,6 +2315,6 @@ return nothing.
 | O-10 | Non-English stopwords | Accept and document | Any time |
 | ~~O-11~~ | Evaluation harness | **Settled → D-088** | ~~before O-13~~ |
 | **O-12** | **In-band claim checker** | One node, one call; a product feature, not a thesis metric | After O-13 |
-| **O-15** | **Stop reason invisible on a clean run** | Always show `stopped_because`; keep the loss list conditional. Found by `/demo-check` | Before a demo |
+| ~~O-15~~ | ~~Stop reason invisible on a clean run~~ | **Settled → D-099** | ~~Before a demo~~ |
 | **O-13** | **Local-first corpus, BM25 first** | SQLite FTS5, no embedding model; sufficiency counted in distinct *papers*; dense retrieval demoted to a measured follow-on | Milestone 6 |
 | ~~O-14~~ | ~~`MAX_DEPTH` default + a yield-based exit~~ | **Settled → D-096.** Adaptive exits instead of a lower ceiling: −66% searches, quality flat, 19/20 runs stop after one round | ~~Now~~ |

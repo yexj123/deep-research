@@ -4,6 +4,11 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Deep Research</title>
+  <!-- An inline SVG data URI rather than a file: browsers request /favicon.ico unprompted,
+       and the 404 was the only console error on the page (found by /demo-check, 2026-09-24).
+       Declaring one here stops the request being made at all, so there is no route to add and
+       no binary in the repo. -->
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>&#128218;</text></svg>">
   <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>

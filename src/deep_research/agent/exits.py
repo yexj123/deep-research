@@ -22,6 +22,12 @@ checkpoint dict without either importing the other -- imports stay pointing down
 
 from deep_research.agent.config import EMPTY_ROUND_RATIO, MAX_DEPTH, SYNTHESIS_TOP_N
 
+# What `describe` says for a run that has not stopped. A module constant rather than an inline
+# string because the coverage panel has to phrase that case differently -- "the run stopped
+# because the run has not finished" is nonsense, and O-15 makes the panel always visible, so
+# the nonsense would be on screen rather than hidden behind `is_complete`.
+NOT_FINISHED = "the run has not finished"
+
 NO_SUBTOPICS = "no_subtopics"
 DEPTH_CEILING = "depth_ceiling"
 NO_NEW_PAPERS = "no_new_papers"
@@ -130,5 +136,5 @@ def describe(reason: str | None, depth: int) -> str:
         )
     if reason is None:
         # A run that has not stopped: interrupted, resumable, or still going (D-084).
-        return "the run has not finished"
+        return NOT_FINISHED
     return REASONS[reason]

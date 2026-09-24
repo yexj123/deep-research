@@ -7,7 +7,9 @@ hypothetical one. These pin that the rendered output is inert.
 
 import pytest
 
-from deep_research.api.rendering import render_review
+from deep_research.agent.coverage import Coverage
+from deep_research.agent.exits import NOT_FINISHED, REASONS
+from deep_research.api.rendering import render_coverage, render_review
 
 
 @pytest.mark.parametrize(
@@ -75,3 +77,55 @@ def test_a_citation_marker_survives_rendering() -> None:
 def test_an_empty_review_renders_to_nothing() -> None:
     """A run with no review yet (D-081's not-started state) renders empty, not an error."""
     assert render_review("") == ""
+
+
+# ---- O-15: the stop reason is always visible ----------------------------------------
+
+
+def test_a_clean_run_is_headed_coverage_not_coverage_and_limitations() -> None:
+    """The panel must not announce limitations a clean run does not have (O-15).
+
+    Making the panel unconditional is only an improvement if it reads well when nothing is
+    wrong. A heading that always says "and limitations" would teach a reader to expect bad
+    news on every run, which is its own kind of dishonesty.
+    """
+    html = render_coverage(
+        Coverage(explored=["a", "b"], papers=30, rounds=1, stopped_because="the prompt was full")
+    )
+    assert "<h2>Coverage</h2>" in html
+    assert "limitations" not in html
+
+
+def test_a_lossy_run_is_headed_coverage_and_limitations() -> None:
+    """The other half of the same rule: when there ARE losses, say so in the heading (O-5)."""
+    html = render_coverage(
+        Coverage(explored=["a"], empty=["b"], papers=10, rounds=1, stopped_because="the shelf was bare")
+    )
+    assert "<h2>Coverage and limitations</h2>" in html
+    assert "No papers found for" in html
+
+
+def test_an_unfinished_run_is_not_described_as_having_stopped() -> None:
+    """"The run stopped because the run has not finished" is nonsense (D-084, O-15).
+
+    It was harmless while the panel was hidden for such runs; now that it is always rendered,
+    the nonsense would be on screen. A resumable run says plainly that it has not finished.
+    """
+    html = render_coverage(
+        Coverage(explored=["a"], papers=5, rounds=1, stopped_because=NOT_FINISHED)
+    )
+    assert "This run has not finished." in html
+    assert "stopped because" not in html
+
+
+def test_the_stop_reason_is_rendered_for_every_exit() -> None:
+    """Whatever ended the run, the panel says so (O-15).
+
+    Parameterised over the real sentences rather than a sample, so a new exit added to
+    `exits.REASONS` without a thought for the UI shows up here.
+    """
+    for reason in REASONS.values():
+        html = render_coverage(
+            Coverage(explored=["a"], papers=30, rounds=1, stopped_because=reason)
+        )
+        assert reason in html, f"the panel dropped: {reason}"

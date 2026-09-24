@@ -11,6 +11,7 @@ testable, and so the page needs no client-side markdown or sanitizer library.
 from markdown_it import MarkdownIt
 
 from deep_research.agent.coverage import Coverage
+from deep_research.agent.exits import NOT_FINISHED
 
 # html=False is the whole defense, and it is NOT the default: MarkdownIt() ships with
 # html=True, which passes raw HTML straight through -- verified 2026-09-21, `<script>` tags
@@ -38,16 +39,34 @@ def render_coverage(coverage: Coverage) -> str:
     in code rather than trusting the prompt (D-070, D-073): the code knows exactly what was
     lost, and a model asked to confess its own gaps may simply not.
 
-    Returns "" for a run that lost nothing, so a clean review isn't padded with a list of
-    nothing. Every value goes through render_review, so a subtopic containing markup is
-    escaped like anything else (D-085).
+    **Always rendered, including for a run that lost nothing (O-15).** It used to be hidden
+    behind `is_complete`, which was right while the panel only listed losses. D-096 changed
+    what it has to say: runs now stop after a single round, and a reader who watches three
+    searches and then synthesis has no way to learn why it did not go deeper. "Enough papers
+    were found to fill the synthesis context" reads as confidence; its absence invites "did it
+    give up?" -- the question a judge asks about the project's headline feature.
+
+    So the *stop reason* is unconditional and the *loss list* stays conditional, which is the
+    distinction D-086 conflated. The heading follows suit: a clean run is headed "Coverage",
+    not "Coverage and limitations", so the panel does not announce limitations that are not
+    there.
+
+    Every value goes through render_review, so a subtopic containing markup is escaped like
+    anything else (D-085).
     """
-    lines = [
-        "## Coverage and limitations",
-        "",
+    # An unfinished run has no stop reason, and "stopped because the run has not finished" is
+    # nonsense that would now be on screen rather than hidden (D-084, D-096).
+    finished = coverage.stopped_because != NOT_FINISHED
+    searched = (
         f"Searched {len(coverage.explored)} subtopic(s) over {coverage.rounds} round(s), "
-        f"finding {coverage.papers} paper(s). The run stopped because "
-        f"{coverage.stopped_because}.",
+        f"finding {coverage.papers} paper(s)."
+    )
+    lines = [
+        "## Coverage" if coverage.is_complete else "## Coverage and limitations",
+        "",
+        f"{searched} The run stopped because {coverage.stopped_because}."
+        if finished
+        else f"{searched} This run has not finished.",
         "",
     ]
     if coverage.empty:

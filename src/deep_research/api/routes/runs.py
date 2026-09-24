@@ -139,10 +139,13 @@ async def stream(request: Request, thread_id: str) -> StreamingResponse:
                 # Rendered and escaped on the server (O-8): the page assigns this to
                 # innerHTML, so the browser must never be handed model-authored markdown.
                 "review_html": render_review(review),
-                # What the run did NOT cover, rendered separately so the model's prose stays
-                # exactly what it wrote -- and so the streamed text still equals `review`
-                # (D-037's integration assertion). Empty for a run that lost nothing (O-5).
-                "coverage_html": "" if coverage.is_complete else render_coverage(coverage),
+                # What the run covered and did NOT cover, rendered separately so the model's
+                # prose stays exactly what it wrote -- and so the streamed text still equals
+                # `review` (D-037's integration assertion). Always present since O-15: the
+                # stop reason is the answer to "why only one round?", which D-096 made the
+                # obvious question and which `is_complete` used to hide on exactly the runs
+                # that prompt it.
+                "coverage_html": render_coverage(coverage),
                 "citation_violations": values.get("citation_violations", []),
             },
         )

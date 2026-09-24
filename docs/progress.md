@@ -61,14 +61,15 @@ finished run complete with its metadata line; server log free of errors, warning
 fires in the real graph, which only an end-to-end run could show.
 
 **Finding 1 (cosmetic): `GET /favicon.ico` 404s**, the only console error on the page. Nobody
-notices until someone opens devtools during a demo and sees red.
+notices until someone opens devtools during a demo and sees red. **Fixed (D-099)** with an
+inline SVG data URI, so the request is never made; console re-verified at 0 errors, 0 warnings.
 
 **Finding 2 (design, worth a decision): the stop reason is invisible on a clean run.**
 `runs.py:145` sends `coverage_html` only when `coverage.is_complete` is false, which D-086
 chose so a clean run isn't cluttered with a list of nothing. Correct as written — but D-096
 means runs now stop after *one* round, and a viewer watching three searches and then synthesis
 has no way to learn why it didn't go deeper. "Enough papers were found to fill the synthesis
-context" is reassuring; its absence invites "did it give up?". Logged as O-15.
+context" is reassuring; its absence invites "did it give up?". Logged as O-15, **settled the same day → D-099**: the stop reason is now unconditional and the loss list stays conditional.
 
 **On flakiness:** two runs is not a flakiness measurement. Both were clean and identically
 shaped, but this says nothing about the ~3% per-planner-call JSON failure D-089 measured

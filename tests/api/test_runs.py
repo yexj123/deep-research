@@ -225,17 +225,32 @@ async def test_the_provider_from_the_request_reaches_the_model_factory(api) -> N
 
 
 @pytest.mark.asyncio
-async def test_a_clean_run_sends_no_coverage_section(api) -> None:
-    """A run that lost nothing isn't padded with a list of nothing (O-5)."""
+async def test_a_clean_run_still_says_why_it_stopped(api) -> None:
+    """A clean run reports its stop reason but no list of losses (O-15, replacing O-5's rule).
+
+    O-5 hid this panel entirely when nothing was lost, which was right while it only listed
+    losses. D-096 changed what it has to say: runs now stop after a single round, and a reader
+    watching three searches and then synthesis has no way to learn why it did not go deeper.
+    The sentence existed, was tested, and was never shown -- on exactly the runs that prompt
+    the question.
+
+    So the split is now: stop reason unconditional, loss list conditional. The heading follows,
+    so a clean run does not announce limitations it does not have.
+    """
+    import json
+
     client, _ = api
     thread_id = await start_run(client)
 
     body = (await client.get(f"/runs/{thread_id}/stream")).text
     done = [data for event, data in parse_sse(body) if event == "done"][0]
+    coverage_html = json.loads(done)["coverage_html"]
 
-    import json
-
-    assert json.loads(done)["coverage_html"] == ""
+    assert "The run stopped because" in coverage_html
+    assert "<h2>Coverage</h2>" in coverage_html, "a clean run must not be headed 'limitations'"
+    # The loss list stays conditional -- this is the part O-5 got right.
+    for loss in ("No papers found for", "Searches that failed", "were skipped"):
+        assert loss not in coverage_html, f"clean run should not mention {loss!r}"
 
 
 @pytest.mark.asyncio
