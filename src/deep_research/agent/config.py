@@ -67,3 +67,23 @@ SYNTHESIS_TOP_N: int | None = 20
 # What would settle it: record an arm with 0.34 and one with 1.0 and compare papers retrieved
 # against specificity. Not worth a paid sweep until a run is actually observed stopping here.
 EMPTY_ROUND_RATIO: float = 0.5
+
+# How many strongly-matching local papers count as "the corpus covers this subtopic" (O-13),
+# and the top-k they are counted within.
+#
+# **Measured, not guessed** (D-104), against a 1669-paper corpus rebuilt from the 80 committed
+# recordings. "Strongly matching" means a paper in the top-k that matches at least half the
+# question's terms -- the plain top-k count that O-13 originally specified returns k for every
+# query in every corpus and cannot discriminate at all.
+#
+#   20 in-domain questions    -> 5 to 20 strongly-matching papers
+#   4 out-of-domain questions -> 0 to 1
+#
+# 3 sits in the middle of that gap: above every out-of-domain result, below every in-domain
+# one, with margin on both sides. The narrowest in-domain margin is `spec-quant` at 5, an
+# intersection question -- which is the right place for the threshold to be tightest, since
+# those are the subtopics most likely to be genuinely uncovered.
+#
+# Re-derive with `uv run python -m tests.eval.corpus_coverage`, which needs no API key.
+MIN_LOCAL_PAPERS: int = 3
+LOCAL_SEARCH_TOP_K: int = 20

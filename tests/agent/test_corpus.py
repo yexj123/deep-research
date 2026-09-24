@@ -20,6 +20,7 @@ from datetime import UTC, datetime
 import pytest
 
 from deep_research.agent.sources.arxiv import build_fts_query
+from deep_research.agent.config import MIN_LOCAL_PAPERS
 from deep_research.persistence.corpus import (
     ABSTRACT,
     FULL_TEXT,
@@ -30,6 +31,7 @@ from deep_research.persistence.corpus import (
     load_sources,
     search,
     stats,
+    strongly_matching_papers,
 )
 from tests.agent.fakes import make_source
 
@@ -365,3 +367,72 @@ def test_stats_on_an_empty_corpus_does_not_crash(db) -> None:
     s = stats(db)
     assert s["papers"] == 0 and s["chunks"] == 0
     assert s["indexed_from"] is None
+
+
+# ---- the sufficiency test that actually discriminates (D-104) ------------------------
+
+
+def test_a_paper_matching_one_common_term_is_not_coverage(db) -> None:
+    """The failure the plain top-k count could not exclude (D-104).
+
+    O-13 specified "at least N distinct papers in the top-k". Measured, that returns k for
+    every query in every corpus -- a 1669-paper ML corpus asked about medieval guilds still
+    returned 20. Requiring half the terms is what makes the answer mean something.
+    """
+    index_sources(db, PAPERS)
+    # "adaptation" hits LoRA on one term only; the other terms are absent from the corpus.
+    assert covering_papers(db, build_fts_query("adaptation of coral reef ecosystems"), limit=10)
+    assert strongly_matching_papers(db, "adaptation of coral reef ecosystems", limit=10) == []
+
+
+def test_a_paper_matching_most_terms_is_coverage(db) -> None:
+    """The positive case: several of the question's terms land on the same paper."""
+    index_sources(db, PAPERS)
+    found = strongly_matching_papers(db, "exact attention with tiling", limit=10)
+    assert PAPERS[0].arxiv_id in found
+
+
+def test_coverage_is_a_subset_of_the_top_k(db) -> None:
+    """Strong matches are filtered *from* the ranked list, never added to it.
+
+    Without this the test could quietly widen its own candidate set and stop being a top-k
+    measure at all.
+    """
+    index_sources(db, PAPERS)
+    question = "attention in transformer models"
+    top = covering_papers(db, build_fts_query(question), limit=10)
+    assert set(strongly_matching_papers(db, question, limit=10)) <= set(top)
+
+
+def test_coverage_preserves_ranking_order(db) -> None:
+    """The caller counts against MIN_LOCAL_PAPERS and then uses these papers, best first."""
+    index_sources(db, PAPERS)
+    question = "attention adaptation modelling"
+    found = strongly_matching_papers(db, question, limit=10)
+    top = covering_papers(db, build_fts_query(question), limit=10)
+    assert found == [p for p in top if p in found]
+
+
+def test_an_empty_corpus_covers_nothing(db) -> None:
+    """First run: no papers, so no coverage, and no exception."""
+    assert strongly_matching_papers(db, "attention in transformer models", limit=10) == []
+
+
+def test_a_question_of_only_stopwords_covers_nothing(db) -> None:
+    """Degrades to "not covered" rather than raising (D-059).
+
+    decompose filters these before dispatch (D-073), so reaching here means the local tier has
+    nothing to go on -- not that the run is broken.
+    """
+    index_sources(db, PAPERS)
+    assert strongly_matching_papers(db, "what is the", limit=10) == []
+
+
+def test_the_threshold_sits_inside_the_measured_gap() -> None:
+    """MIN_LOCAL_PAPERS must stay between the two populations D-104 measured.
+
+    in-domain scored 5 to 20; out-of-domain 0 to 1. A threshold outside that gap is either
+    always on (the failure O-13's original test had) or never on. Pinned so a later retune
+    has to stay defensible rather than merely plausible.
+    """
+    assert 1 < MIN_LOCAL_PAPERS < 5

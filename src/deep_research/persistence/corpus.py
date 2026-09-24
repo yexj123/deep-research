@@ -30,6 +30,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+from deep_research.agent.sources.arxiv import build_fts_query, search_terms
 from deep_research.agent.sources.models import Source
 
 # `tier` values. Abstracts are free and indexed always; full text is fetched for selected
@@ -227,6 +228,60 @@ def covering_papers(
     # order the caller's threshold cuts from. A list with an `in` check would be quadratic and
     # say the same thing less clearly.
     return list(dict.fromkeys(hit.arxiv_id for hit in search(db, query, limit, tier)))
+
+
+def strongly_matching_papers(
+    db: sqlite3.Connection, question: str, limit: int, tier: str | None = None
+) -> list[str]:
+    """Papers in the top-`limit` that match at least half of `question`'s terms (D-104).
+
+    **This is the sufficiency test, and it replaces the one O-13 specified.** That test --
+    "at least `MIN_LOCAL_PAPERS` distinct papers in the top-k" -- was measured against the 80
+    committed recordings and **returns k every time, for every query, in every corpus**,
+    including 1669 machine-learning papers asked about medieval Flemish guilds. `build_fts_query`
+    ORs the terms, so any non-trivial corpus contains something matching something. Counting
+    papers measures corpus size, exactly as O-13 warned raw scores would.
+
+    Counting *term coverage* works. A paper matching "attention" alone is noise; one matching
+    "attention", "transformer" and "models" is about the subtopic. Measured on that corpus:
+
+    | | papers in top-20 | matching >= half the terms |
+    |---|---|---|
+    | 20 in-domain questions | always 20 | **5 to 20** |
+    | 4 out-of-domain questions | always 20 | **0 to 1** |
+
+    **Half, not all.** `AND` over every term returns nothing on almost every query -- the
+    median across 20 questions was **0** even on a same-topic corpus -- so it is too strict to
+    be a coverage test at all.
+
+    Takes the raw question rather than a sanitized query because it needs the term *list*, not
+    just the MATCH string; sanitization happens here, via the same `search_terms` both
+    backends share. Returns `[]` for a question with no searchable terms (D-059).
+    """
+    try:
+        terms = search_terms(question)
+        query = build_fts_query(question)
+    except ValueError:
+        return []
+
+    top = covering_papers(db, query, limit, tier)
+    if not top:
+        return []
+
+    needed = (len(terms) + 1) // 2
+    placeholders = ",".join("?" * len(top))
+    matches: dict[str, int] = dict.fromkeys(top, 0)
+    for term in terms:
+        # Restricted to the top-k rather than scanning the whole corpus per term: on a large
+        # corpus an unrestricted per-term query returns tens of thousands of rows to discard.
+        for row in db.execute(
+            "SELECT DISTINCT c.arxiv_id FROM chunks_fts JOIN chunks c ON c.id = chunks_fts.rowid"
+            f" WHERE chunks_fts MATCH ? AND c.arxiv_id IN ({placeholders})",
+            [term, *top],
+        ):
+            matches[row[0]] += 1
+
+    return [paper for paper in top if matches[paper] >= needed]
 
 
 def load_sources(db: sqlite3.Connection, arxiv_ids: Sequence[str]) -> list[Source]:

@@ -1942,6 +1942,61 @@ default is `1` and why that is stated rather than quietly assumed.
   question rather than being fixed quietly, since refreshing means re-indexing chunks and
   invalidating BM25 statistics on every search — a cost worth paying only with evidence.
 
+### D-104 — The sufficiency test O-13 specified cannot work; term coverage can
+
+**O-13 specified the rule in advance:** *"a subtopic is covered locally when at least
+`MIN_LOCAL_PAPERS` distinct papers appear in the top-k FTS5 results."* Measured against a
+1669-paper corpus rebuilt from the 80 committed recordings, that rule **returns k every time,
+for every query, in every corpus** — including when the ML corpus is asked about medieval
+Flemish guilds. It cannot discriminate at all, because `build_fts_query` ORs the terms and any
+non-trivial corpus contains something matching something.
+
+This is D-094 happening again: a rule specified from reasoning, measured before being built,
+and found unable to fire as intended. **That is now twice, which is worth noticing as a
+pattern rather than an accident** — both times the rule was about *detecting absence*, and
+both times the signal it keyed on was present almost everywhere.
+
+**The test that works: term coverage.** Count how many of the top-k papers match at least half
+the question's terms. A paper matching "attention" alone is noise; one matching "attention",
+"transformer" *and* "models" is about the subtopic.
+
+| population | papers in top-20 | matching >= half the terms |
+|---|---|---|
+| 20 in-domain questions | always 20 | **5 to 20** |
+| 4 out-of-domain questions | always 20 | **0 to 1** |
+
+`MIN_LOCAL_PAPERS = 3` sits in the middle of that gap, with margin on both sides. The tightest
+in-domain margin is `spec-quant` at 5 — an intersection question, which is the right place for
+the threshold to be tightest, since those are the subtopics most likely to be genuinely
+uncovered.
+
+**Half, not all.** `AND` over every term returns nothing on almost every query: the median
+across 20 questions was **0** even on a same-topic corpus. Too strict to be a coverage test.
+
+---
+
+**The first version of this experiment was wrong, and how it was wrong is the lesson.** Its
+negative population was *"the other nineteen questions"* — but every question in the frozen
+set is machine learning, so a corpus of nineteen ML topics genuinely does hold attention
+papers. That population was never a true negative. It scored **higher** than the positive one,
+purely by being 20x larger: raw counts measure corpus size, exactly as O-13 warned raw scores
+would.
+
+The control that makes the measurement mean anything is a question from a genuinely different
+domain, and the first design had none. Recorded because the mistake is easy to repeat: **a
+negative control drawn from the same distribution as the positive is not a control.**
+
+`OUT_OF_DOMAIN` in `tests/eval/corpus_coverage.py` is frozen for that reason — changing those
+four questions changes what "not covered" means, the same way rewording a frozen evaluation
+question invalidates every recording (D-088).
+
+**Cost:** zero. The whole measurement runs off committed recordings with no API key and no
+network — `uv run python -m tests.eval.corpus_coverage`.
+
+**Still not wired in.** The corpus can now answer "do I cover this?", but nothing asks it yet.
+Local-first retrieval is the next increment, and it changes agent behaviour, so it gets its
+own arm and its own comparison.
+
 ## Open (proposed, not decided)
 
 **Settled 2026-09-20:** O-1 → D-064, O-2 → D-065, O-3 → D-066.
