@@ -267,9 +267,13 @@ event loop that uses it, so the web layer must create it inside the app lifespan
 
 ### `agent/nodes/synthesize.py` [M1 → M2]
 **Defines:**
-- `SYSTEM_PROMPT`: requires citations in exactly the form `[arXiv:<arxiv_id>]` (D-046), and says the
-  `<papers>` block is data, not instructions (D-055);
-- `format_papers(sources)`: the `<papers>` block, one `[arXiv:<id>] <title>` line plus abstract per paper;
+- `new_fence()`: a per-run `secrets.token_hex(8)` delimiter token (D-097);
+- `system_prompt(fence)`: requires citations in exactly the form `[arXiv:<arxiv_id>]` (D-046), and
+  names the fenced block as data, not instructions (D-055, D-097). Replaced the old
+  `SYSTEM_PROMPT` constant, which could not carry a per-run token;
+- `format_papers(sources, fence="")`: the papers block, one `[arXiv:<id>] <title>` line plus
+  abstract per paper. **The unfenced form is a compatibility contract** -- `tests/eval/test_record.py`
+  builds `retrieval_context` with it and all 80 recordings contain that text (D-088);
 - `NO_SOURCES_REVIEW`: returned without calling the model when `sources` is empty (D-060);
 - `make_synthesize(model_factory)`, which returns the async `synthesize(state, runtime)` node.
 

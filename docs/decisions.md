@@ -2117,7 +2117,14 @@ attacker-controllable text than an abstract.
 
 ### Ongoing / not milestone-gated
 
-#### O-8 — Prompt-injection defenses
+#### ~~O-8 — Prompt-injection defenses~~ — **settled → D-085 (XSS) and D-097 (nonce fence)**
+
+**Settled 2026-09-24.** Option A below was taken: `new_fence()` generates a per-run
+`secrets.token_hex(8)` token, `format_papers(sources, fence)` wraps the block in it, and
+`system_prompt(fence)` names that exact token. The options table is kept because the reasoning
+against B (a blacklist that catches one string) and C (a weaker boundary with no evidence
+behind it) is still the reasoning for A. **Instruction-following injection in plain prose
+remains mitigated, not solved** -- see D-097.
 
 **Decided so far:** citation IDs restricted to the retrieved set (D-046); an unparseable marker
 reported rather than ignored (D-062); papers passed as a delimited data block (D-055).
