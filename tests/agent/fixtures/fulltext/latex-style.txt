@@ -1,0 +1,265 @@
+FAIR-RAG: Faithful Adaptive Iterative Refinement for
+Retrieval-Augmented Generation
+Mohammad Aghajani Asl
+Sharif University of Technology
+m.aghajani@physics.sharif.edu
+Majid Asgari-Bidhendi
+Iran University of Science and Technology
+Noor Avaran Jelvehaye Maanaei Najm Co., Ltd.
+majid.asgari@gmail.com
+Behrooz Minaei-Bidgoli
+Iran University of Science and Technology
+b_minaei@iust.ac.ir
+Abstract
+While Retrieval-Augmented Generation (RAG)
+mitigates hallucination and knowledge stale-
+ness in Large Language Models (LLMs), exist-
+ing frameworks often falter on complex, multi-
+hop queries that require synthesizing informa-
+tion from disparate sources. Current advanced
+RAG methods, employing iterative or adaptive
+strategies, still lack a robust mechanism to sys-
+tematically identify and fill evidence gaps, of-
+ten propagating noise or failing to gather a com-
+prehensive context. In this paper, we introduce
+FAIR-RAG, a novel agentic framework that
+transforms the standard RAG pipeline into a
+dynamic, evidence-driven reasoning process.
+At the core of FAIR-RAG is an Iterative Refine-
+ment Cycle governed by a novel module we
+term Structured Evidence Assessment (SEA).
+The SEA acts as an analytical gating mecha-
+nism: it deconstructs the initial query into a
+checklist of required findings and systemati-
+cally audits the aggregated evidence to iden-
+tify confirmed facts and, critically, explicit in-
+formational gaps. These identified gaps pro-
+vide a precise, actionable signal to an Adap-
+tive Query Refinement agent, which then gen-
+erates new, targeted sub-queries to retrieve the
+missing information. This cycle repeats until
+the evidence is verified as sufficient, ensuring
+a comprehensive context for a final, strictly
+faithful generation step. We conduct exten-
+sive experiments on challenging multi-hop QA
+benchmarks, including HotpotQA, 2WikiMul-
+tiHopQA, and MusiQue.Under a unified and
+controlled experimental setup,FAIR-RAG
+significantly outperforms strong representative
+baselines. On HotpotQA, it achieves an F1-
+score of 0.453—an absolute improvement of
+8.3 points over the strongest iterative baseline—
+establishing a new state-of-the-art for this
+class of methods on these benchmarks.Our
+work demonstrates that a structured, evidence-
+driven refinement process with explicit gap
+analysis is crucial for unlocking reliable and
+accurate reasoning in advanced RAG systems
+for complex, knowledge-intensive tasks.
+1 Introduction
+Large Language Models (LLMs) have demon-
+strated remarkable capabilities across a wide range
+of natural language processing tasks, including
+question-answering (QA) (Brown et al., 2020;
+Chowdhery et al., 2022). However, their knowl-
+edge is inherently static, confined to the data they
+were trained on, which leads to factual inaccura-
+cies and an inability to reason about events beyond
+their training cut-off date. Furthermore, LLMs
+are prone to “hallucination,” generating plausible
+yet factually incorrect information, which severely
+limits their reliability in knowledge-intensive ap-
+plications (Ji et al., 2023). To mitigate these is-
+sues, Retrieval-Augmented Generation (RAG) has
+emerged as a prominent paradigm. By ground-
+ing the generation process on information retrieved
+from external knowledge bases, RAG systems aim
+to produce more accurate, timely, and verifiable
+responses (Lewis et al., 2020).
+Despite its advantages, the standard “retrieve-
+then-read” RAG pipeline often falls short when
+faced with real-world user queries, which are fre-
+quently complex and cannot be answered through
+a single-shot retrieval step. For instance, a query
+such as“Which movie, directed by the same per-
+son who directed Inception, won an Oscar for
+arXiv:2510.22344v1  [cs.CL]  25 Oct 2025
+Best Cinematography?”requires multi-hop rea-
+soning (Yang et al., 2018): first identifying the
+director ofInception(Christopher Nolan) and then
+searching for his movies that have won the spec-
+ified award. Standard RAG frameworks struggle
+with such multi-hop queries, as well as comparative
+or analytical questions that require synthesizing in-
+formation from multiple sources. Moreover, they
+are not robust to suboptimal user query formula-
+tions and often fail to enforce that the generated
+answer remains strictly faithful to the retrieved evi-
+dence, thus perpetuating the risk of hallucination.
+To address these limitations, several advanced
+RAG methodologies have been proposed.Itera-
+tive approaches, such as ITER-RETGEN (Shao
+et al., 2023), refine the retrieved information over
+multiple cycles by using the previously generated
+output as context for the next retrieval step.Adap-
+tive approaches, like Adaptive-RAG (Jeong et al.,
+2024), aim for efficiency by dynamically selecting
+the retrieval strategy (e.g., no retrieval, single-step,
+or multi-step) based on an initial assessment of the
+query’s complexity. Other frameworks like SELF-
+RAG (Asai et al., 2023) introduce self-reflection
+mechanisms, training the LLM to generate special
+tokens that control the retrieval and critique pro-
+cess on the fly. Nonetheless, a gap remains for a
+framework that synergistically combines iterative
+evidence refinement with adaptive query genera-
+tion and an explicit, modular faithfulness check.
+Existing iterative methods can propagate noise by
+using entire generations as queries, while adaptive
+methods may not sufficiently refine the evidence
+needed for complex queries after the initial routing.
+In this paper, we introduceFAIR-RAG, a
+novel framework forFaithful,Adaptive,Iterative
+Refinement inRetrieval-AugmentedGeneration.
+FAIR-RAG is designed to robustly handle complex
+queries by orchestrating a dynamic, multi-stage
+workflow. The framework begins with anAdaptive
+Routingmodule that analyzes query complexity to
+determine an optimal execution path, either by di-
+rectly answering simple queries or by allocating the
+appropriate computational resources for complex
+ones. For non-trivial queries, FAIR-RAG initiates
+a cyclical process designed to progressively build
+and validate a context. At the core of this cycle is
+anIterative Refinementloop where LLM agents
+intelligently decompose information needs, retrieve
+evidence, and filter out noise. Crucially, each cy-
+cle culminates in aStructured Evidence Assess-
+ment (SEA)module, which acts as an analytical
+gating mechanism. This module emulates a cog-
+nitive workflow by first deconstructing the user’s
+query into a checklist of required findings. It then
+systematically synthesizes the retrieved evidence
+against this checklist, verifying what is confirmed
+and, most importantly, explicitly identifying any
+“Remaining Gaps.”These identified gaps provide
+a precise, actionable signal for theAdaptive Query
+Refinementmodule, which then generates new, tar-
+geted queries specifically designed to retrieve the
+missing information. This evidence-centric loop
+continues until sufficiency is achieved, ensuring
+that the finalFaithful Answer Generationstep
+is strictly grounded in a comprehensive and ver-
+ified knowledge context, substantially enhancing
+trustworthiness and reducing hallucination.
+Our main contributions are as follows:
+• We introduce a novel agentic RAG architec-
+ture centered on anIterative Refinement
+loop. This evidence-centric cycle is governed
+by an analytical gating mechanism we term
+Structured Evidence Assessment (SEA). By
+systematically deconstructing the query and
+identifying specific information gaps, the SEA
+module intelligently guides subsequent itera-
+tions. This process progressively builds and
+validates a comprehensive context, enabling
+the system to robustly handle complex, multi-
+faceted, and multi-hop queries where single-
+pass retrieval would fail.
+• We design a sophisticated, two-stage query
+strategy. It begins withsemantic decomposi-
+tionto ensure all facets of the initial query are
+addressed, and more importantly, incorporates
+anAdaptive Query Refinementmechanism
+that analyzes evidence gaps to intelligently
+generate new queries, effectively reasoning
+about what information is still missing.
+• We implement an integrated approach to re-
+source optimization throughdynamic re-
+source allocation. Our framework employs
+an initialAdaptive Routingmechanism to
+bypass the RAG pipeline for simple queries
+and dynamically assigns LLMs of varying
+sizes to internal tasks based on their com-
+plexity, achieving a superior balance between
+response quality, latency, and computational
+cost.
+• We propose a robust, two-pronged approach
+to guarantee faithfulness. This includes: (1) a
+pre-generationStructured Evidence Assess-
+ment (SEA), which performs a final analyt-
+ical pass to verify that all required findings
+from the initial query deconstruction are fully
+supported by the aggregated evidence, and (2)
+aconstrained generation promptthat en-
+forces citation and prevents the model from
+introducing external knowledge. This combi-
+nation ensures the final answer is both verifi-
+able and trustworthy.
+We conducted extensive experiments on a suite
+of four challenging open-domain QA bench-
+marks to evaluate the FAIR-RAG framework, en-
+compassing complex multi-hop reasoning tasks
+(HotpotQA(Yang et al., 2018),2WikiMulti-
+HopQA,Musique) and a large-scale single-hop
+factual dataset (TriviaQA). Our best-performing
+configuration,FAIR-RAG 3 (Adaptive LLMs),
+was benchmarked against a wide range of strong
+baselines, including sequential (Standard RAG),
+conditional (Adaptive-RAG), and other state-of-
+the-art iterative methods (Iter-Retgen, Self-RAG).
+The results clearly demonstrate the superiority of
+our approach. On theHotpotQAbenchmark, our
+model sets a new state-of-the-art with an F1-score
+of0.453, surpassing the strongest iterative baseline,
+Iter-Retgen (0.370), by a significant margin of8.3
+points. This pattern of superior performance is
+consistent across other complex benchmarks: on
+2WikiMultiHopQA, FAIR-RAG achieves an F1
+of0.320, outperforming the next best method,Self-
+RAG (0.251), by6.9 points, and onMusique, it
+scores an F1 of0.264, which is7.4 pointshigher
+thanIter-Retgen (0.190).
+Notably, FAIR-RAG’s architecture also excels
+on simpler factual queries, achieving a state-of-the-
+art F1 score of0.731onTriviaQA, showcasing
+its versatility. Our analysis further validates FAIR-
+RAG’s core principles: performance consistently
+improves as the number of refinement iterations
+increases from one to three (e.g., F1 on HotpotQA
+improves from 0.398 for FAIR-RAG 1 to 0.447 for
+FAIR-RAG 3), confirming the value of the iterative
+evidence-gathering loop. Furthermore, the adap-
+tive LLM allocation strategy provides an additional
+performance boost across all metrics. Finally, our
+framework consistently achieves the highest scores
+on the semantic metricACC LLM (e.g.,0.847on
+TriviaQA), confirming that its improvements reflect
+a deeper contextual understanding, not just lexical
+overlap. This robust performance validates the ef-
+fectiveness of our iterative, evidence-driven frame-
+work in enhancing both the accuracy and faithful-
+ness of LLM-based QA systems.
+2 Related Work
+The paradigm of Retrieval-Augmented Genera-
+tion (RAG) has rapidly evolved from a straight-
+forward retrieve-then-read pipeline to more sophis-
+ticated, dynamic frameworks. Our work, FAIR-
+RAG, builds upon and extends several key research
+threads in this domain.
+2.1 Standard Retrieval-Augmented
+Generation
+The foundational concept of RAG is to enhance
+the capabilities of LLMs by grounding them in
+external, non-parametric knowledge bases (Lewis
+et al., 2020). Early and influential RAG models
+typically employ a two-stage process: a retriever
+first fetches a set of relevant documents from a cor-
+pus based on the input query, and then a reader
+(or generator), which is often an LLM, synthe-
+sizes the final response conditioned on both the
+original query and the retrieved documents. This
+approach has proven effective in mitigating fac-
+tual inconsistencies (hallucinations) and providing
+answers based on up-to-date information, thereby
+overcoming the static 
