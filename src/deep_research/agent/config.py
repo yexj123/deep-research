@@ -49,3 +49,21 @@ RECURSION_LIMIT: int = 15
 # context buys nothing measurable, and 20 leaves headroom over the observed maximum of 12
 # because BM25 will not perfectly predict which papers the model chooses to cite.
 SYNTHESIS_TOP_N: int | None = 20
+
+# What fraction of a round's subtopics must return zero papers before the run stops (D-096).
+#
+# **This number is a judgement, not a measurement, and it is the only one here that is.**
+# Every other constant in this file is backed by a recorded experiment. This one is not, and
+# it cannot be with today's data: D-095 observed empty searches at 10.9% on narrow questions,
+# but no recorded run ever had enough empty rounds to fit a threshold to. It is named rather
+# than written inline as `* 2` so it can be argued with (D-098).
+#
+# The reasoning for 0.5, at MAX_SUBTOPICS = 3 meaning "2 of 3 empty stops the run":
+# - 1.0 (all empty) would almost never fire. D-095 measured one productive subtopic out of
+#   three being enough to keep a run drilling into literature that does not exist.
+# - Anything at or below 1/3 stops on a single dead end, which is normal and not evidence of
+#   anything -- the agent would quit on its first unlucky query.
+#
+# What would settle it: record an arm with 0.34 and one with 1.0 and compare papers retrieved
+# against specificity. Not worth a paid sweep until a run is actually observed stopping here.
+EMPTY_ROUND_RATIO: float = 0.5

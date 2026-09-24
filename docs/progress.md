@@ -30,9 +30,11 @@ Backed by `CLAUDE.md`, the output style, and `Edit(/tests/**)`, `Edit(/docs/**)`
       scored; depth fails on intersection questions too, and fails hardest there
 - [x] **O-14 settled → D-096 (`ac1b37c`, measured in `8e267b6`)** — adaptive exits instead of a lower `MAX_DEPTH`:
       −66% arXiv searches, quality flat, 19/20 runs stop after one round. `MAX_DEPTH` stays 2
-- [ ] **Review D-096's `src/` changes** — `agent/exits.py` (new), plus the edits to `graph.py`,
-      `coverage.py`, `state.py` and `decompose.py`. Written at your instruction rather than
-      proposed, so it is the one part of `src/` you have not defended line by line yet
+- [x] **Reviewed D-096's `src/` changes → D-098 (`pending`)** — the three judgement calls
+      settled: `EMPTY_ROUND_RATIO` promoted to a named constant (unchanged at 0.5), the
+      empty-round exit kept because it covers the thin-question case `PROMPT_FULL` structurally
+      cannot, and `MAX_DEPTH` left at 2 because lowering it to 0 would make the adaptive exits
+      unreachable
 - [x] **O-8 / D-097 — the nonce fence** (`6693e44`) — `new_fence`, `system_prompt(fence)` and
       `format_papers(sources, fence="")` in `synthesize.py`; 14 tests green, 538 total
 - [ ] **Run `/demo-check` yourself** — Claude cannot invoke it. Milestone 5's last unticked

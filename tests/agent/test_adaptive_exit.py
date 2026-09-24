@@ -26,7 +26,12 @@ mistake of asserting that the model behaved.
 
 import pytest
 
-from deep_research.agent.config import MAX_DEPTH, MAX_SUBTOPICS, SYNTHESIS_TOP_N
+from deep_research.agent.config import (
+    EMPTY_ROUND_RATIO,
+    MAX_DEPTH,
+    MAX_SUBTOPICS,
+    SYNTHESIS_TOP_N,
+)
 from deep_research.agent.graph import route_after_gap_check
 from deep_research.agent.state import ResearchState
 from tests.agent.fakes import make_source
@@ -124,6 +129,34 @@ def test_a_round_half_empty_stops() -> None:
     """
     state = _state(empty_before_round=0, empty_subtopics=["a", "b"])  # 2 of 3
     assert route_after_gap_check(state) == "synthesize"
+
+
+def test_the_threshold_comes_from_config_not_a_literal() -> None:
+    """`EMPTY_ROUND_RATIO` is a judgement, so it must be changeable in one visible place (D-098).
+
+    Asserted against the constant rather than against "2 of 3": if someone retunes the ratio,
+    this test must follow it rather than pinning a number the code no longer uses. Every other
+    exit constant is backed by a recorded experiment; this one is not, and hiding it inside
+    `empties * 2 >= dispatched` made it impossible to argue with.
+    """
+    just_under = int(MAX_SUBTOPICS * EMPTY_ROUND_RATIO + 0.999) - 1
+    just_over = just_under + 1
+
+    keeps_going = _state(empty_subtopics=[f"e{i}" for i in range(just_under)])
+    assert route_after_gap_check(keeps_going) == "decompose"
+
+    stops = _state(empty_subtopics=[f"e{i}" for i in range(just_over)])
+    assert route_after_gap_check(stops) == "synthesize"
+
+
+def test_the_threshold_is_strictly_between_one_dead_end_and_all_of_them() -> None:
+    """The two failure modes the ratio sits between (D-098).
+
+    At or below 1/n the agent quits on its first unlucky query; at 1.0 it almost never fires,
+    which is the D-095 behaviour it exists to prevent. Any future retune must stay inside
+    those bounds, and this test says so rather than leaving it in a comment.
+    """
+    assert 1 / MAX_SUBTOPICS < EMPTY_ROUND_RATIO < 1.0
 
 
 def test_a_round_with_one_empty_subtopic_of_three_continues() -> None:

@@ -160,6 +160,9 @@ data that is (D-015, D-032).
 - `MAX_DEPTH = 2`, used by `graph.route_after_gap_check` — 0-indexed, so 3 search passes (D-026).
   Since D-096 this is a **ceiling, not a target**: the adaptive exits normally stop a run after
   one round, so most runs never reach it;
+- `EMPTY_ROUND_RATIO = 0.5` [D-096, D-098], used by `exits._came_back_empty`. **The only
+  constant in this file not backed by a recorded experiment**, and named rather than inlined
+  so that is visible; the bounds it must stay within are asserted in `test_adaptive_exit.py`;
 - `RECURSION_LIMIT = 15`, used by the **caller** as invoke config. The graph never reads it: leave
   it out of the config and LangGraph silently uses its default of 25 (D-077).
 

@@ -1679,6 +1679,66 @@ changing the unfenced form would quietly make new recordings incomparable to the
 exist to be compared against — a D-088 violation no test would otherwise catch. The recorder
 passes no fence deliberately, and `test_papers_fence.py` pins the unfenced string exactly.
 
+### D-098 — Three judgement calls in D-096, settled after review
+
+D-096 shipped with three things decided by reasoning rather than measurement. Reviewed and
+settled on 2026-09-24; each is recorded with what *would* overturn it, because none rests on
+an experiment.
+
+**1. The empty-round threshold becomes a named constant, and stays at one half.**
+
+It was `empties_this_round * 2 >= dispatched` — a judgement disguised as arithmetic. It is now
+`EMPTY_ROUND_RATIO = 0.5` in `config.py`, carrying the argument for the value and what would
+settle it. At `MAX_SUBTOPICS = 3` the behaviour is unchanged: 2 of 3 empty stops the run.
+
+Kept at 0.5 because the two neighbouring values are both wrong in a known direction: **1.0**
+(all empty) would almost never fire, which is the D-095 behaviour the rule exists to prevent —
+one productive subtopic of three kept those runs drilling. **1/3 or below** stops on a single
+dead end, which is normal and not evidence of anything; the agent would quit on its first
+unlucky query. `test_adaptive_exit.py` now asserts `1/MAX_SUBTOPICS < EMPTY_ROUND_RATIO < 1.0`,
+so a future retune has to stay inside those bounds or fail a test.
+
+**What would settle it:** record one arm at 0.34 and one at 1.0 and compare papers retrieved
+against specificity. Deliberately *not* run — no recorded run has been observed stopping on
+this rule at all, so there is nothing yet to tune against, and D-079's warning about rates
+from thin data applies.
+
+**2. The empty-round exit is kept, despite never having been observed firing.**
+
+The case against was this project's own rule, the one that killed D-094's paraphrase filter:
+don't ship what you have measured cannot fire. On reflection that rule does not apply, and the
+distinction is worth stating precisely.
+
+The paraphrase filter was **structurally** unable to fire — rounds are near-disjoint, so no
+novelty rule can ever trigger, at any data. This one is merely **pre-empted**: `PROMPT_FULL`
+stops 19 of 20 runs before it is reached. But `PROMPT_FULL` can only fire on a question with
+*plenty* of literature. A **thin** question never reaches the cap, so nothing else stops it,
+and it recurses to the ceiling drilling an empty shelf — precisely D-095's failure. The two
+rules are complements covering opposite cases, not alternatives.
+
+`fed-privacy` came within one paper of being that run: 19 retrieved in round 1, cap 20.
+
+**What would overturn it:** a full sweep in which no run ever stops here *and* no run under
+the cap ever wastes a round on empty searches. Then it is dead weight and should go.
+
+**3. `MAX_DEPTH` stays at 2.**
+
+Lowering it to 0 was the original request and D-095's recommendation. Rejected now for a
+sharper reason than before: with the adaptive exits in place, `MAX_DEPTH = 0` would make exits
+2, 3 and 4 **unreachable** — there is no second round to prevent — deleting the mechanism that
+was just measured and built. The ceiling now costs essentially nothing (runs average 1.05
+rounds and nothing has reached 3), while lowering it reintroduces the risk of capping a run
+that legitimately needed more.
+
+Lowering to 1 was also considered: no adaptive run has used a third round, so 1 would be
+sufficient for everything observed. Rejected because a backstop nothing reaches is not
+costing anything, and a backstop set too low is a silent quality loss — the asymmetry favours
+leaving headroom.
+
+**The honest framing for all three:** these are reasoned defaults with stated falsifiers, not
+measured results. They are in the log at the same level of confidence they deserve, which is
+lower than D-094's or D-095's.
+
 ## Open (proposed, not decided)
 
 **Settled 2026-09-20:** O-1 → D-064, O-2 → D-065, O-3 → D-066.

@@ -20,7 +20,7 @@ checkpoint dict without either importing the other -- imports stay pointing down
 (code-map rule 1).
 """
 
-from deep_research.agent.config import MAX_DEPTH, SYNTHESIS_TOP_N
+from deep_research.agent.config import EMPTY_ROUND_RATIO, MAX_DEPTH, SYNTHESIS_TOP_N
 
 NO_SUBTOPICS = "no_subtopics"
 DEPTH_CEILING = "depth_ceiling"
@@ -97,9 +97,15 @@ def _came_back_empty(dispatched: int, empties_this_round: int) -> bool:
     all, against 1.1% on broad ones: the narrower the intersection, the less exists at it, so
     drilling further finds less rather than more.
 
-    Half rather than all, because demanding every subtopic be empty would almost never fire --
-    one productive subtopic of three kept those runs drilling. One dead end on its own is
-    normal and must not stop a run, or the agent quits on its first unlucky query.
+    **This rule covers the case rule 3 structurally cannot, which is why it is kept even
+    though no recorded run has been observed stopping here (D-098).** `PROMPT_FULL` fires when
+    a question has plenty of literature -- 19 of 20 questions. A *thin* question never reaches
+    the cap, so nothing above stops it, and it recurses to the ceiling drilling an empty shelf:
+    exactly D-095's failure. `fed-privacy` came within one paper of being that run. The two
+    rules are complements, not alternatives.
+
+    The threshold is `EMPTY_ROUND_RATIO`, named in `config.py` because it is a judgement
+    rather than a measurement -- the argument for 0.5 is there, with what would settle it.
     """
     if not dispatched:
         # Unreachable today: `route_subtopics` sends an empty plan straight to synthesize
@@ -107,7 +113,7 @@ def _came_back_empty(dispatched: int, empties_this_round: int) -> bool:
         # this round find anything" when no round ran is to stop -- if that guard is ever
         # removed, this fails toward terminating rather than toward looping.
         return True
-    return empties_this_round * 2 >= dispatched
+    return empties_this_round >= dispatched * EMPTY_ROUND_RATIO
 
 
 def describe(reason: str | None, depth: int) -> str:
