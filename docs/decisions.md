@@ -1997,6 +1997,59 @@ network — `uv run python -m tests.eval.corpus_coverage`.
 Local-first retrieval is the next increment, and it changes agent behaviour, so it gets its
 own arm and its own comparison.
 
+### D-105 — A covered subtopic skips arXiv rather than augmenting it (O-13, third increment)
+
+**O-13 said "on fallback, augment rather than replace". The measurements overturned the
+replace half of that.** Two facts, both from data already on disk:
+
+1. **Two runs of the same question retrieve ~89% different papers.** Mean Jaccard overlap 11%,
+   median 8%, min 0%, measured across 20 questions and 80 recordings. arXiv's answer to the
+   same question is close to a fresh draw each time.
+2. **Those runs produce statistically indistinguishable reviews.** D-094 and D-095: every
+   quality metric within 2 SE across four arms.
+
+Together: **paper identity does not drive review quality — topical relevance does.** A review
+written from the corpus's papers should therefore be as good as one written from today's
+arXiv results, because "today's results" were already near-arbitrary among the relevant set.
+
+That makes augmenting the worse option on its own terms. It keeps the network call, adds
+papers that `rank_sources` truncates away at `SYNTHESIS_TOP_N` (D-091), and buys nothing any
+instrument here can detect. **Skipping is the only version of local-first with a measurable
+benefit**, and the benefit is the call itself: one request and one rate-limit interval per
+covered subtopic, against a limiter that serializes at 3 s (D-064).
+
+**The fallback stays pure arXiv**, not arXiv-plus-corpus-leftovers. One variable per arm
+(D-088): `LOCAL_FIRST` toggles exactly whether a *covered* subtopic uses the network. Mixing
+corpus hits into uncovered subtopics as well would change two things at once and make the
+recorded comparison unreadable. Augment-on-fallback remains available as a later experiment.
+
+**Off by default.** This changes what reaches the review, so it gets a recorded arm before it
+becomes the default — the D-091 discipline, and the reason the 80 committed recordings stay
+comparable.
+
+**Reported, never hidden.** `local_subtopics` flows into `Coverage.local` and the panel says:
+
+> **Answered from the local corpus:** *tiling attention kernels*. No new arXiv search was
+> performed for those subtopics, so papers published since they were last indexed are not
+> represented.
+
+It sits in the **always-visible** part of the panel (D-099), not the loss list — answering
+from the corpus is not a failure, but a reader judging how current a review is has to know.
+arXiv grows ~100 GB a month, and silence is this project's recurring failure (D-062, D-069).
+
+**Two ordering details that are load-bearing:**
+
+- `build_search_query` runs **before** the corpus check, so a malformed subtopic fails the
+  same way whether or not the corpus could have answered it. After the check, a
+  stopwords-only subtopic would be served locally while crashing the remote path — two
+  contracts for one input (D-073).
+- A corpus *read* failure returns `[]` and falls through to arXiv. The D-101 rule applied to
+  reads: a broken corpus costs latency, never the subtopic.
+
+**What is still unmeasured, and is the next paid step:** whether a locally-answered review is
+actually as good. The argument above is an inference from two measurements, not a measurement
+of the thing itself. It needs a `LOCAL_FIRST=true` arm recorded against the current default.
+
 ## Open (proposed, not decided)
 
 **Settled 2026-09-20:** O-1 → D-064, O-2 → D-065, O-3 → D-066.

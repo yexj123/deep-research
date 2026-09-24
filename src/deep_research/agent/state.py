@@ -54,6 +54,12 @@ class ResearchState:
     # this a "nothing published on X" subtopic is indistinguishable from a productive one --
     # which is exactly the loss O-5 exists to surface. Same dedup reducer as explored (D-067).
     empty_subtopics: Annotated[list[str], merge_subtopics] = field(default_factory=list)
+    # Answered from the local corpus without searching arXiv (O-13, D-105). A *reported* fact,
+    # not a control signal: the papers are real and the subtopic is genuinely explored, but
+    # the reader is entitled to know the answer came from a cache that may be months old.
+    # arXiv grows ~100 GB a month, so a corpus that covered a topic in March silently misses
+    # April's key paper -- and silence is this project's recurring failure (D-062, D-069, O-5).
+    local_subtopics: Annotated[list[str], merge_subtopics] = field(default_factory=list)
     seen_paper_ids: Annotated[set[str], operator.or_] = field(default_factory=set)
     sources: Annotated[list[Source], merge_sources] = field(default_factory=list)
     # Each worker returns its own delta, never a running total (D-067).

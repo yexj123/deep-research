@@ -1,0 +1,190 @@
+"""Answering a subtopic from the corpus instead of arXiv (O-13, D-105).
+
+**The decision these pin.** When the corpus covers a subtopic, the worker uses it and does
+*not* call arXiv. O-13 originally said "augment rather than replace", and the measurements
+overturned that:
+
+- Two runs of the same question retrieve **~89% different papers** (mean Jaccard 11%, median
+  8%, across 20 questions and 80 recordings).
+- Those runs produce **statistically indistinguishable reviews** (D-094, D-095 -- every
+  quality metric within 2 SE).
+
+So paper *identity* does not drive quality; topical relevance does. Augmenting would keep the
+network call, add papers that ranking truncates away at `SYNTHESIS_TOP_N`, and buy nothing
+measurable. Skipping buys the call.
+
+**`LOCAL_FIRST` is off by default**, so these tests enable it explicitly. That is the D-091
+discipline: a change to what reaches the review gets a recorded arm before it becomes the
+default, and the off state stays reproducible from the same codebase (D-088).
+
+**What is deliberately NOT tested here: that local answers are as good.** That needs a paid
+arm and a judge, not a unit test. Asserting it here would be the D-078 mistake.
+"""
+
+import sqlite3
+
+import pytest
+
+from deep_research.agent.config import MIN_LOCAL_PAPERS
+from deep_research.agent.nodes import research_worker as worker_module
+from deep_research.agent.nodes.research_worker import make_research_worker
+from deep_research.agent.sources.rate_limit import ArxivRateLimiter
+from deep_research.persistence.corpus import SCHEMA, index_sources
+from tests.agent.fakes import load_arxiv_fixture, make_arxiv_stub, make_source
+
+SUBTOPIC = "tiling attention kernels"
+
+# Papers that strongly match SUBTOPIC: each carries most of its terms, which is what the
+# coverage test requires (D-104). Enough of them to clear MIN_LOCAL_PAPERS with margin.
+COVERED = [
+    make_source(
+        arxiv_id=f"2411.{20000 + i:05d}",
+        title=f"Tiling attention kernels, part {i}",
+        summary="IO-aware tiling of attention kernels for exact attention.",
+    )
+    for i in range(MIN_LOCAL_PAPERS + 2)
+]
+
+
+@pytest.fixture
+def local_first(monkeypatch):
+    """Enable the feature in the module that reads it.
+
+    `LOCAL_FIRST` is bound into `research_worker`'s namespace at import (the D-094 lesson
+    about module constants), so patching `config` alone would change nothing.
+    """
+    monkeypatch.setattr(worker_module, "LOCAL_FIRST", True)
+
+
+@pytest.fixture
+def corpus():
+    db = sqlite3.connect(":memory:")
+    db.executescript(SCHEMA)
+    yield db
+    db.close()
+
+
+async def _run(corpus, subtopic=SUBTOPIC):
+    """Run the worker against a stub that records whether arXiv was called at all."""
+    stub = make_arxiv_stub(load_arxiv_fixture("search_ok.xml"))
+    worker = make_research_worker(stub.client, ArxivRateLimiter(0.0), corpus)
+    try:
+        update = await worker({"subtopic": subtopic, "seen_paper_ids": set()})
+    finally:
+        await stub.client.aclose()
+    return update, stub.requests
+
+
+@pytest.mark.asyncio
+async def test_a_covered_subtopic_does_not_call_arxiv(local_first, corpus) -> None:
+    """The whole point: the network call is what skipping buys (D-105).
+
+    Asserted on the request log rather than on timing, so it cannot pass by being merely fast.
+    """
+    index_sources(corpus, COVERED)
+    update, requests = await _run(corpus)
+
+    assert requests == [], "a covered subtopic must not reach arXiv"
+    assert update["explored_subtopics"] == [SUBTOPIC]
+    assert len(update["sources"]) >= MIN_LOCAL_PAPERS
+
+
+@pytest.mark.asyncio
+async def test_an_uncovered_subtopic_still_calls_arxiv(local_first, corpus) -> None:
+    """The fallback, and the control for the test above.
+
+    Without this, a worker that never used the corpus at all would pass the covered case only
+    by accident of the fixture.
+    """
+    index_sources(corpus, COVERED)
+    _, requests = await _run(corpus, subtopic="crystallography of perovskite lattices")
+
+    assert len(requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_thinly_covered_subtopic_still_calls_arxiv(local_first, corpus) -> None:
+    """Below `MIN_LOCAL_PAPERS` is not coverage (D-104).
+
+    The boundary in the direction that costs a network call rather than the direction that
+    silently answers from too little -- a review built on two cached papers would look exactly
+    like one built on twenty.
+    """
+    index_sources(corpus, COVERED[: MIN_LOCAL_PAPERS - 1])
+    _, requests = await _run(corpus)
+
+    assert len(requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_the_feature_is_off_by_default(corpus) -> None:
+    """Without the fixture enabling it, behaviour is exactly today's (D-091, D-088).
+
+    This is what keeps the 80 committed recordings comparable to anything recorded after
+    local-first lands.
+    """
+    index_sources(corpus, COVERED)
+    update, requests = await _run(corpus)
+
+    assert len(requests) == 1, "LOCAL_FIRST defaults off, so arXiv must still be called"
+    assert "local_subtopics" not in update
+
+
+@pytest.mark.asyncio
+async def test_a_local_answer_is_reported_not_hidden(local_first, corpus) -> None:
+    """A cached answer must be visible to the reader (O-5, D-105).
+
+    The papers are real and the subtopic is genuinely explored, so nothing here is a loss --
+    but a reader judging how current a review is has to know part of it came from a corpus
+    that may be months old. Silence is this project's recurring failure (D-062, D-069).
+    """
+    index_sources(corpus, COVERED)
+    update, _ = await _run(corpus)
+
+    assert update["local_subtopics"] == [SUBTOPIC]
+
+
+@pytest.mark.asyncio
+async def test_local_papers_are_validated_sources(local_first, corpus) -> None:
+    """Corpus papers flow into the same state, ranking and citation check as fetched ones.
+
+    A dict-shaped row would fail somewhere far from here -- in `rank_sources`, or in the
+    checkpoint round trip (D-043, D-014).
+    """
+    index_sources(corpus, COVERED)
+    update, _ = await _run(corpus)
+
+    paper = update["sources"][0]
+    assert paper.arxiv_id and paper.title and paper.summary
+    assert paper.published.tzinfo is not None
+
+
+@pytest.mark.asyncio
+async def test_a_broken_corpus_falls_back_to_arxiv(local_first, corpus) -> None:
+    """A read failure costs latency, not the subtopic (the D-101 rule, applied to reads).
+
+    The remote path still works, so a locked or corrupt corpus must degrade to today's
+    behaviour rather than failing research that arXiv could have answered.
+    """
+    index_sources(corpus, COVERED)
+    corpus.close()
+
+    update, requests = await _run(corpus)
+
+    assert len(requests) == 1
+    assert "failed_subtopics" not in update
+
+
+@pytest.mark.asyncio
+async def test_a_malformed_subtopic_fails_the_same_way_with_or_without_the_corpus(
+    local_first, corpus
+) -> None:
+    """The local path must not accept subtopics the remote path rejects (D-073).
+
+    `build_search_query` runs before the corpus check on purpose. If it ran after, a subtopic
+    of pure stopwords would be answered locally while the same subtopic crashed the arXiv
+    path -- two different contracts for one input.
+    """
+    index_sources(corpus, COVERED)
+    with pytest.raises(ValueError):
+        await _run(corpus, subtopic="what is the")

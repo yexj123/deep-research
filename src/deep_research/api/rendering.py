@@ -69,6 +69,16 @@ def render_coverage(coverage: Coverage) -> str:
         else f"{searched} This run has not finished.",
         "",
     ]
+    if coverage.local:
+        # Stated in the always-visible part, not the loss list: answering from the corpus is
+        # not a failure, but a reader deciding how current a review is needs to know that some
+        # of it came from a cache rather than from today's arXiv (O-13, D-105).
+        lines += [
+            f"**Answered from the local corpus:** {', '.join(coverage.local)}. "
+            "No new arXiv search was performed for those subtopics, so papers published since "
+            "they were last indexed are not represented.",
+            "",
+        ]
     if coverage.empty:
         lines += [
             "**No papers found for:** " + ", ".join(coverage.empty) + ".",

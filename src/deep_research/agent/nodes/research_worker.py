@@ -10,11 +10,20 @@ import pydantic
 from defusedxml import DefusedXmlException
 from langgraph.config import get_stream_writer
 
-from deep_research.agent.config import ARXIV_MAX_RESULTS
+from deep_research.agent.config import (
+    ARXIV_MAX_RESULTS,
+    LOCAL_FIRST,
+    LOCAL_SEARCH_TOP_K,
+    MIN_LOCAL_PAPERS,
+)
 from deep_research.agent.sources.arxiv import ArxivAPIError, build_search_query, search_arxiv
 from deep_research.agent.sources.models import Source
 from deep_research.agent.sources.rate_limit import ArxivRateLimiter
-from deep_research.persistence.corpus import index_sources
+from deep_research.persistence.corpus import (
+    index_sources,
+    load_sources,
+    strongly_matching_papers,
+)
 
 
 class SubtopicTask(TypedDict):
@@ -99,6 +108,35 @@ def _index_into_corpus(
         writer({"status": f"Could not index results for {subtopic!r} ({exc})"})
 
 
+def _local_answer(
+    corpus: sqlite3.Connection | None, subtopic: str
+) -> list[Source]:
+    """Papers already held locally for this subtopic, or `[]` to go to arXiv (O-13, D-105).
+
+    **Covered means term coverage, not paper count** (D-104): at least `MIN_LOCAL_PAPERS`
+    papers in the top-k that match half the subtopic's terms. The plain count O-13 originally
+    specified returns k for every query in every corpus and would make this always fire.
+
+    **Why skipping the search rather than augmenting it.** Measured across 80 recordings, two
+    runs of the same question retrieve ~89% different papers (mean Jaccard 11%), and those
+    runs produce statistically indistinguishable reviews (D-094, D-095). Paper identity does
+    not drive quality; topical relevance does. Augmenting would keep the network call, add
+    papers that ranking truncates away at `SYNTHESIS_TOP_N`, and buy nothing measurable.
+
+    A read failure returns `[]` rather than raising: the arXiv path still works, so a broken
+    corpus should cost latency, not the subtopic (the D-101 rule, applied to reads).
+    """
+    if corpus is None or not LOCAL_FIRST:
+        return []
+    try:
+        ids = strongly_matching_papers(corpus, subtopic, LOCAL_SEARCH_TOP_K)
+        if len(ids) < MIN_LOCAL_PAPERS:
+            return []
+        return load_sources(corpus, ids)
+    except sqlite3.Error:
+        return []
+
+
 def make_research_worker(
     http_client: httpx.AsyncClient,
     limiter: ArxivRateLimiter,
@@ -119,8 +157,20 @@ def make_research_worker(
         writer = _progress_writer()
         writer({"status": f"Searching arXiv for {subtopic!r}"})
         # Outside the try on purpose: decompose guarantees the subtopic is searchable (D-073),
-        # so a ValueError here is a bug and must crash rather than burn the retry cap.
+        # so a ValueError here is a bug and must crash rather than burn the retry cap. Built
+        # before the corpus check so a malformed subtopic fails the same way either way --
+        # otherwise the local path would quietly accept subtopics the remote path rejects.
         query = build_search_query(subtopic)
+
+        local = _local_answer(corpus, subtopic)
+        if local:
+            writer({"status": f"Answered {subtopic!r} from {len(local)} local paper(s)"})
+            return {
+                "sources": local,
+                "explored_subtopics": [subtopic],  # genuinely explored, just not over HTTP
+                "seen_paper_ids": {source.arxiv_id for source in local},
+                "local_subtopics": [subtopic],  # reported, never hidden (D-105)
+            }
 
         try:
             async with limiter:  # held across the request, not just its start (D-064)

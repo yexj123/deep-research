@@ -87,3 +87,17 @@ EMPTY_ROUND_RATIO: float = 0.5
 # Re-derive with `uv run python -m tests.eval.corpus_coverage`, which needs no API key.
 MIN_LOCAL_PAPERS: int = 3
 LOCAL_SEARCH_TOP_K: int = 20
+
+# Whether a covered subtopic is answered from the corpus *instead of* searching arXiv (O-13).
+#
+# **Off until a recorded arm says otherwise**, the same discipline as SYNTHESIS_TOP_N (D-091):
+# this changes what reaches the review, so it gets measured before it becomes the default.
+#
+# The reasoning for skip-rather-than-augment, which the evidence already settles (D-105):
+# two runs of the same question retrieve **~89% different papers** (mean Jaccard overlap 11%,
+# median 8%, measured across 20 questions and 80 recordings), and those runs produce
+# statistically indistinguishable reviews (D-094, D-095: every quality metric within 2 SE).
+# Paper *identity* therefore does not drive quality -- topical relevance does -- so corpus
+# papers should serve as well as fresh ones. Augmenting instead would keep the network call,
+# add papers that ranking truncates away at SYNTHESIS_TOP_N, and buy nothing measurable.
+LOCAL_FIRST: bool = False

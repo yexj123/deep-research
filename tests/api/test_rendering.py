@@ -129,3 +129,32 @@ def test_the_stop_reason_is_rendered_for_every_exit() -> None:
             Coverage(explored=["a"], papers=30, rounds=1, stopped_because=reason)
         )
         assert reason in html, f"the panel dropped: {reason}"
+
+
+def test_a_locally_answered_subtopic_is_reported(  ) -> None:
+    """A cached answer appears in the always-visible part of the panel (O-13, D-105).
+
+    Not in the loss list: answering from the corpus is not a failure. But a reader judging how
+    current a review is must be told that some of it came from a cache, and that papers
+    published since are not represented. arXiv grows ~100 GB a month.
+    """
+    html = render_coverage(
+        Coverage(
+            explored=["a", "b"],
+            local=["b"],
+            papers=30,
+            rounds=1,
+            stopped_because="the prompt was full",
+        )
+    )
+    assert "Answered from the local corpus" in html
+    assert "not represented" in html
+    assert "<h2>Coverage</h2>" in html, "a cached answer is not a limitation"
+
+
+def test_a_run_with_no_local_answers_says_nothing_about_the_corpus() -> None:
+    """No corpus sentence when the corpus was not used -- the panel stays about this run."""
+    html = render_coverage(
+        Coverage(explored=["a"], papers=30, rounds=1, stopped_because="the prompt was full")
+    )
+    assert "local corpus" not in html

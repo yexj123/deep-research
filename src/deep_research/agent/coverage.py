@@ -29,6 +29,8 @@ class Coverage:
 
     explored: list[str] = field(default_factory=list)
     empty: list[str] = field(default_factory=list)
+    # Answered from the local corpus without a fresh arXiv search (O-13, D-105).
+    local: list[str] = field(default_factory=list)
     failed: dict[str, int] = field(default_factory=dict)
     skipped_entries: int = 0
     papers: int = 0
@@ -94,6 +96,7 @@ def summarize_coverage(values: dict[str, Any]) -> Coverage:
     return Coverage(
         explored=list(values.get("explored_subtopics", [])),
         empty=list(values.get("empty_subtopics", [])),
+        local=list(values.get("local_subtopics", [])),
         failed={first_spelling[key]: count for key, count in attempts.items()},
         skipped_entries=values.get("skipped_entries", 0),
         papers=len(values.get("sources", [])),
