@@ -449,6 +449,7 @@ Claude writes and maintains every file here (since 2026-09-19; see `CLAUDE.md`).
 
 | File | What it is | Uses |
 |---|---|---|
+| `conftest.py` (root) [D-102] | Suite-wide setup: disables every LangSmith tracing flag and removes the API keys at import time, before LangChain loads. A developer `.env` had tracing on with a dead key, costing ~11 s per flush and sending run content off the machine | `os.environ` only |
 | `agent/conftest.py` | Fixtures: `fake_factory`, `checkpointer` (a fresh `InMemorySaver` with `serde=build_serializer()`), `arxiv_ok` (an arXiv stub serving `search_ok.xml`, closed after the test) | `fakes.py`, `persistence/checkpointer.build_serializer` |
 | `agent/fakes.py` | Test doubles: `RecordingFactory` (stands in for `get_chat_model` and records providers; its default reply cites `2411.18583`), `make_arxiv_stub` (an `httpx.MockTransport` client that records requests), `load_arxiv_fixture`, `make_source` | `context.ProviderType`, `sources/models.Source`, `httpx`, LangChain's `GenericFakeChatModel` |
 | `agent/fixtures/arxiv/*.xml` | 3 real arXiv responses + 4 derived ones (origins in the README there) | read by `load_arxiv_fixture` |

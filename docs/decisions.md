@@ -1870,6 +1870,45 @@ which is a second, stronger reason for D-100's sync decision than the one record
 **Lifetime:** the corpus opens on its own synchronous connection to the same file as the
 checkpoints and the runs table (D-007), and closes in a `finally` alongside them.
 
+### D-102 — The test suite is kept off the network
+
+**Symptom.** `uv run pytest` took anywhere between **14 and 97 seconds** for the same 581
+tests, and the "slow test" moved between runs. Individual tests reported ~11.1 s, consistent to
+the centisecond, but ran in 0.4 s in isolation.
+
+**Cause.** A developer `.env` sets `LANGSMITH_TRACING_V2=true` with a LangSmith key that no
+longer authorizes. Nothing in `src/` or `tests/` loads that file — the LangSmith SDK finds it
+itself — so the suite had a network dependency that no test asked for and no file mentioned.
+Every LangChain call was traced, and the flush blocked ~11 s on
+`LangSmithAuthError: 401 Unauthorized` before giving up.
+
+**Fix.** `tests/conftest.py` sets every tracing flag to `false` and *removes* the API keys at
+import time, before LangChain loads. `python-dotenv` does not override variables that already
+exist, so this wins over `.env` without editing it. Development tracing is unaffected: it only
+applies under pytest. **Measured: 97 s → 13.5 s**, top duration 1.36 s.
+
+**Two reasons this belongs in the suite rather than in a README note:**
+
+- **A test suite that depends on an external service is not a test suite.** It fails, or
+  crawls, for reasons unrelated to the code under test, and on a machine with no network it
+  does both.
+- **Traces carry the content.** Research questions, retrieved abstracts and generated reviews
+  were leaving the machine on every `pytest` run, including the paid eval sweeps. That sits
+  badly against this project's rule that users bring their own keys and nothing of theirs is
+  baked in — and it was nobody's decision; it arrived through a file borrowed from another
+  project (`LANGSMITH_PROJECT=langchain_academy`).
+
+**Every spelling is disabled, not the one that looked right.** The flag actually in use was
+`LANGSMITH_TRACING_V2`, which is neither of LangSmith's two documented names — so guessing
+`LANGSMITH_TRACING` alone, as the first attempt did, changed nothing and made the cause look
+like something else.
+
+**The cost of not noticing sooner.** Three separate investigations went hunting for a code
+regression that did not exist — first blaming the corpus connection, then SQLite lock
+contention, then the rate limiter. Worth recording as a debugging lesson: **a duration
+constant to the centisecond is a timeout, not computation**, and a slow test that is fast in
+isolation is environmental.
+
 ## Open (proposed, not decided)
 
 **Settled 2026-09-20:** O-1 → D-064, O-2 → D-065, O-3 → D-066.
