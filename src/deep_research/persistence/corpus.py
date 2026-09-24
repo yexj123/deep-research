@@ -43,6 +43,7 @@ FULL_TEXT = "full_text"
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS papers (
     arxiv_id      TEXT PRIMARY KEY,
+    version       INTEGER NOT NULL DEFAULT 1,
     title         TEXT NOT NULL,
     authors       TEXT NOT NULL,
     summary       TEXT NOT NULL,
@@ -89,14 +90,36 @@ class Hit:
 
 
 def connect(path: str) -> sqlite3.Connection:
-    """Open the corpus and make sure its schema exists.
+    """Open the corpus and make sure its schema exists and is current.
 
     `check_same_thread=False` because a caller may hand this to `asyncio.to_thread`; the
     connection is still used by one task at a time.
     """
     db = sqlite3.connect(path, check_same_thread=False)
     db.executescript(SCHEMA)
+    migrate(db)
     return db
+
+
+def migrate(db: sqlite3.Connection) -> None:
+    """Bring an existing corpus up to the current schema.
+
+    `CREATE TABLE IF NOT EXISTS` does nothing to a table that already exists, so a column
+    added after the first release would be missing on every corpus built before it -- and
+    `load_sources` would read `NULL` or fall back to a default, producing papers that are
+    quietly wrong rather than absent. This is idempotent and runs on every `connect`.
+
+    The corpus is a cache and could simply be rebuilt, but rebuilding silently discards the
+    `indexed_at` history the staleness report depends on (O-13), so migrating is the cheaper
+    honest option.
+    """
+    columns = {row[1] for row in db.execute("PRAGMA table_info(papers)")}
+    if "version" not in columns:
+        # Added after D-100 shipped without it. DEFAULT 1 is wrong for any paper that was
+        # actually at v2+, which is why the fix is a migration and not just a schema edit:
+        # rows written before this point cannot be repaired, only re-indexed.
+        db.execute("ALTER TABLE papers ADD COLUMN version INTEGER NOT NULL DEFAULT 1")
+        db.commit()
 
 
 def index_sources(db: sqlite3.Connection, sources: Sequence[Source]) -> int:
@@ -111,6 +134,14 @@ def index_sources(db: sqlite3.Connection, sources: Sequence[Source]) -> int:
     The chunk text is `title + summary` rather than the summary alone, because a title carries
     the method name a search is most likely to be for ("FlashAttention") while the abstract
     may only paraphrase it.
+
+    **First seen wins, deliberately.** A paper already in the corpus is left alone even if
+    arXiv now serves a newer version, matching `merge_sources`, which dedups on `arxiv_id` and
+    keeps the first (D-067). The consequence is real and belongs in the staleness story rather
+    than being fixed quietly here: a corpus can hold v1's abstract months after v3 appeared.
+    Deciding whether to refresh on version change is part of O-13's open staleness question,
+    and doing it here would mean re-indexing chunks and invalidating BM25 statistics on every
+    search -- a cost worth paying only once there is evidence it matters.
     """
     now = datetime.now(UTC).isoformat()
     added = 0
@@ -118,10 +149,11 @@ def index_sources(db: sqlite3.Connection, sources: Sequence[Source]) -> int:
         for source in sources:
             cursor = db.execute(
                 "INSERT OR IGNORE INTO papers"
-                " (arxiv_id, title, authors, summary, published, url, indexed_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                " (arxiv_id, version, title, authors, summary, published, url, indexed_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     source.arxiv_id,
+                    source.version,
                     source.title,
                     json.dumps(list(source.authors)),
                     source.summary,
@@ -191,11 +223,10 @@ def covering_papers(
     number gets measured with O-11 rather than guessed -- choosing it by intuition would be
     `recursion_limit = 150` again (D-077).
     """
-    seen: list[str] = []
-    for hit in search(db, query, limit, tier):
-        if hit.arxiv_id not in seen:
-            seen.append(hit.arxiv_id)
-    return seen
+    # dict.fromkeys dedups in one pass while preserving first-seen order, which is the ranking
+    # order the caller's threshold cuts from. A list with an `in` check would be quadratic and
+    # say the same thing less clearly.
+    return list(dict.fromkeys(hit.arxiv_id for hit in search(db, query, limit, tier)))
 
 
 def load_sources(db: sqlite3.Connection, arxiv_ids: Sequence[str]) -> list[Source]:
@@ -211,7 +242,7 @@ def load_sources(db: sqlite3.Connection, arxiv_ids: Sequence[str]) -> list[Sourc
     rows = {
         row[0]: row
         for row in db.execute(
-            "SELECT arxiv_id, title, authors, summary, published, url"
+            "SELECT arxiv_id, version, title, authors, summary, published, url"
             f" FROM papers WHERE arxiv_id IN ({placeholders})",
             list(arxiv_ids),
         )
@@ -219,12 +250,12 @@ def load_sources(db: sqlite3.Connection, arxiv_ids: Sequence[str]) -> list[Sourc
     return [
         Source(
             arxiv_id=rows[i][0],
-            version=1,
-            title=rows[i][1],
-            authors=tuple(json.loads(rows[i][2])),
-            summary=rows[i][3],
-            published=datetime.fromisoformat(rows[i][4]),
-            url=rows[i][5],
+            version=rows[i][1],
+            title=rows[i][2],
+            authors=tuple(json.loads(rows[i][3])),
+            summary=rows[i][4],
+            published=datetime.fromisoformat(rows[i][5]),
+            url=rows[i][6],
         )
         for i in arxiv_ids
         if i in rows

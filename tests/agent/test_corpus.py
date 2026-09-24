@@ -251,6 +251,81 @@ def test_a_paper_from_the_corpus_is_a_validated_source(db) -> None:
     assert restored[0].published.tzinfo is not None, "timezone must survive the round trip"
 
 
+def test_the_paper_version_survives_the_round_trip(db) -> None:
+    """A v3 paper must not come back claiming v1 (D-103).
+
+    `version` is a validated field on `Source`, and the first version of this schema simply
+    did not store it -- `load_sources` hardcoded 1. The result was a paper whose `version`
+    said 1 while its `url` still ended `v3`: internally inconsistent, wrong in a way that
+    reads as normal, and invisible until someone compared the two. Nothing downstream uses
+    `version` today, which is exactly why it could have stayed wrong indefinitely.
+    """
+    versioned = make_source(arxiv_id="2411.20000", version=3, url="https://arxiv.org/abs/2411.20000v3")
+    index_sources(db, [versioned])
+
+    restored = load_sources(db, ["2411.20000"])[0]
+    assert restored.version == 3
+    assert restored.url.endswith("v3"), "version and url must not contradict each other"
+
+
+def test_an_older_corpus_gains_the_version_column(tmp_path) -> None:
+    """A corpus built before `version` existed must still open (D-103).
+
+    `CREATE TABLE IF NOT EXISTS` does nothing to a table that already exists, so without a
+    migration every corpus built by the first release would raise `no such column: version`
+    on the next read -- or, worse, be silently rebuilt and lose the `indexed_at` history the
+    staleness report depends on.
+    """
+    import sqlite3 as _sqlite3
+
+    from deep_research.persistence.corpus import connect
+
+    path = str(tmp_path / "old.sqlite")
+    old = _sqlite3.connect(path)
+    old.executescript(
+        """
+        CREATE TABLE papers (
+            arxiv_id TEXT PRIMARY KEY, title TEXT NOT NULL, authors TEXT NOT NULL,
+            summary TEXT NOT NULL, published TEXT NOT NULL, url TEXT NOT NULL,
+            indexed_at TEXT NOT NULL, has_full_text INTEGER NOT NULL DEFAULT 0
+        );
+        """
+    )
+    old.execute(
+        "INSERT INTO papers VALUES ('2411.18583', 'T', '[]', 'S',"
+        " '2024-11-27T00:00:00+00:00', 'https://arxiv.org/abs/2411.18583v1',"
+        " '2026-01-01T00:00:00+00:00', 0)"
+    )
+    old.commit()
+    old.close()
+
+    migrated = connect(path)
+    try:
+        assert load_sources(migrated, ["2411.18583"])[0].version == 1
+        assert stats(migrated)["indexed_from"] == "2026-01-01T00:00:00+00:00", (
+            "the index history must survive the migration"
+        )
+    finally:
+        migrated.close()
+
+
+def test_migrating_twice_is_harmless(tmp_path) -> None:
+    """`connect` runs the migration every time, so it has to be idempotent."""
+    from deep_research.persistence.corpus import connect
+
+    path = str(tmp_path / "twice.sqlite")
+    for _ in range(3):
+        db = connect(path)
+        db.close()
+
+    db = connect(path)
+    try:
+        index_sources(db, PAPERS)
+        assert stats(db)["papers"] == 3
+    finally:
+        db.close()
+
+
 def test_load_sources_keeps_the_order_asked_for(db) -> None:
     """Ranking order is the whole point of retrieval; `IN (...)` does not preserve it."""
     index_sources(db, PAPERS)

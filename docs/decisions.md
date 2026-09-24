@@ -1909,6 +1909,39 @@ contention, then the rate limiter. Worth recording as a debugging lesson: **a du
 constant to the centisecond is a timeout, not computation**, and a slow test that is fast in
 isolation is environmental.
 
+### D-103 — The corpus stores `version`, and gains a migration
+
+**Bug, introduced by D-100 and found on review.** `Source` has a validated `version` field.
+The first corpus schema did not store it, so `load_sources` hardcoded `version=1`. A paper
+indexed at v3 came back claiming v1 **while its `url` still ended `v3`** — internally
+inconsistent, wrong in a way that reads as entirely normal.
+
+It would have stayed wrong indefinitely, because **nothing downstream uses `version` today**:
+citations key on the canonical id (D-044), ranking uses title and summary, and the review
+never mentions it. A field that nothing reads is a field no test notices is broken.
+
+**Fixed:** a `version` column, written by `index_sources` and read by `load_sources`, plus a
+test asserting `version` and `url` cannot contradict each other.
+
+**And a migration, which is the part worth more than the fix.** `CREATE TABLE IF NOT EXISTS`
+does nothing to a table that already exists, so every corpus built by D-100 would have raised
+`no such column: version` on the next read. `migrate()` runs on every `connect`, is
+idempotent, and adds the column in place. Rebuilding instead would have been simpler and
+wrong: it silently discards the `indexed_at` history the staleness report depends on (O-13).
+
+Rows written before the fix cannot be repaired, only re-indexed — which is why the column
+default is `1` and why that is stated rather than quietly assumed.
+
+**Two smaller things settled in the same pass:**
+
+- `covering_papers` dedups with `dict.fromkeys` rather than a list membership check — one pass
+  instead of quadratic, and it states the intent (preserve first-seen order) more directly.
+- **First seen wins on re-indexing, deliberately.** A paper already in the corpus is left alone
+  even when arXiv serves a newer version, matching `merge_sources` (D-067). A corpus can
+  therefore hold v1's abstract months after v3 appeared. That belongs in O-13's open staleness
+  question rather than being fixed quietly, since refreshing means re-indexing chunks and
+  invalidating BM25 statistics on every search — a cost worth paying only with evidence.
+
 ## Open (proposed, not decided)
 
 **Settled 2026-09-20:** O-1 → D-064, O-2 → D-065, O-3 → D-066.
