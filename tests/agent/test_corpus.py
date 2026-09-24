@@ -436,3 +436,36 @@ def test_the_threshold_sits_inside_the_measured_gap() -> None:
     has to stay defensible rather than merely plausible.
     """
     assert 1 < MIN_LOCAL_PAPERS < 5
+
+
+def test_a_subtopic_with_an_unknown_term_is_not_covered(db) -> None:
+    """Every query term must appear somewhere in the corpus (D-106).
+
+    The half-the-terms rule alone was validated on whole questions (7-12 terms), but
+    production feeds subtopics (2-4), where "half" can be a single generic word. Measured:
+    "CRISPR off-target effects" scored *full* coverage against a machine-learning corpus,
+    because "target" and "effects" are common ML words while "crispr" matched nothing.
+
+    A threshold validated on one input distribution and applied to another is not validated.
+    """
+    index_sources(db, PAPERS)
+    # "attention" and "tiling" are in the corpus; "crispr" is not.
+    assert strongly_matching_papers(db, "crispr attention tiling", limit=10) == []
+    assert strongly_matching_papers(db, "exact attention tiling", limit=10) != []
+
+
+def test_the_vocabulary_check_respects_the_tier(db) -> None:
+    """A term present only in full text must not make an abstracts-only arm look covered.
+
+    Otherwise the tier filter leaks: the comparison arm would answer locally on the strength
+    of text it was configured not to use (D-088).
+    """
+    index_sources(db, PAPERS)
+    db.execute(
+        "INSERT INTO chunks (arxiv_id, tier, section, text) VALUES (?, ?, 'method', ?)",
+        (PAPERS[0].arxiv_id, FULL_TEXT, "quantized attention tiling kernels"),
+    )
+    db.commit()
+
+    assert strongly_matching_papers(db, "quantized attention tiling", limit=10, tier=ABSTRACT) == []
+    assert strongly_matching_papers(db, "quantized attention tiling", limit=10, tier=FULL_TEXT) != []

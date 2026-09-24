@@ -13,6 +13,7 @@ before spending money on judging.
 
 import asyncio
 import os
+import sqlite3
 import time
 
 import httpx
@@ -36,6 +37,8 @@ from deep_research.agent.llm import get_chat_model
 from deep_research.agent.nodes.synthesize import format_papers
 from deep_research.agent.sources.rate_limit import ArxivRateLimiter
 from deep_research.persistence.checkpointer import build_serializer
+from deep_research.persistence.corpus import SCHEMA as CORPUS_SCHEMA
+from deep_research.persistence.corpus import index_sources
 from tests.eval.recording import (
     DEFAULT_QUESTION_SET,
     Recording,
@@ -85,6 +88,43 @@ EVAL_MAX_DEPTH = int(os.environ["EVAL_MAX_DEPTH"]) if "EVAL_MAX_DEPTH" in os.env
 # or two arms that asked different things look comparable.
 EVAL_QUESTION_SET = os.environ.get("EVAL_QUESTION_SET", DEFAULT_QUESTION_SET)
 
+# EVAL_LOCAL_FIRST=1 records the O-13 local-first arm (D-105): a subtopic the corpus covers is
+# answered from it and arXiv is not called. Like EVAL_MAX_DEPTH this patches the module that
+# imported the constant, not config -- `from ..config import LOCAL_FIRST` binds a copy
+# (the D-094 lesson).
+EVAL_LOCAL_FIRST = os.environ.get("EVAL_LOCAL_FIRST", "") not in ("", "0", "false")
+
+# The corpus is rebuilt in memory from the committed recordings rather than kept as a file:
+# 1669 papers, indexed in about a second, and reproducible by anyone who has the repo. A
+# checked-in 7 MB binary would be neither.
+#
+# This is the realistic scenario local-first exists for -- someone who has researched these
+# topics before -- and it is deliberately generous: the corpus holds papers from earlier runs
+# of these exact questions. If local-first does not help here, it will not help anywhere.
+_CORPUS: sqlite3.Connection | None = None
+
+
+def _eval_corpus() -> sqlite3.Connection | None:
+    """The seeded corpus, or None when the arm does not use one."""
+    global _CORPUS
+    if not EVAL_LOCAL_FIRST:
+        return None
+    if _CORPUS is None:
+        from tests.eval.corpus_coverage import all_recorded_papers
+
+        _CORPUS = sqlite3.connect(":memory:", check_same_thread=False)
+        _CORPUS.executescript(CORPUS_SCHEMA)
+        index_sources(_CORPUS, all_recorded_papers())
+    return _CORPUS
+
+
+def monkeypatch_local_first() -> None:
+    """Apply EVAL_LOCAL_FIRST to the module research_worker actually reads."""
+    if EVAL_LOCAL_FIRST:
+        import deep_research.agent.nodes.research_worker as worker_module
+
+        worker_module.LOCAL_FIRST = True
+
 
 def _settings() -> dict[str, object]:
     """Everything that makes one recording incomparable to another if it differs."""
@@ -93,7 +133,10 @@ def _settings() -> dict[str, object]:
         "model": MODEL_NAMES[PROVIDER],
         "max_depth": EVAL_MAX_DEPTH,
         "max_subtopics": MAX_SUBTOPICS,
-        "retrieval_unit": "abstract",  # O-13 will produce recordings with "full_text"
+        # What is retrieved and from where. "abstract" is arXiv only; "abstract-local" adds
+        # D-105's corpus-first path; "full_text" comes later. Reusing this key rather than
+        # adding a dimension keeps the 80 committed arm names stable (D-088).
+        "retrieval_unit": "abstract-local" if EVAL_LOCAL_FIRST else "abstract",
         "synthesis_top_n": SYNTHESIS_TOP_N,  # None = the pre-ranking baseline arm (D-091)
         "question_set": EVAL_QUESTION_SET,  # which frozen set was asked (O-14)
         # "adaptive" once D-096's exits landed: the run may stop well before max_depth, so
@@ -134,6 +177,7 @@ async def test_record_a_run(case: dict[str, str]) -> None:
     than repeating the whole paid set.
     """
     monkeypatch_depth()
+    monkeypatch_local_first()
     await _space_from_previous_question()
     config: RunnableConfig = {
         "configurable": {"thread_id": f"eval-{case['id']}"},
@@ -145,6 +189,7 @@ async def test_record_a_run(case: dict[str, str]) -> None:
             http_client,
             ArxivRateLimiter(ARXIV_MIN_INTERVAL_SECONDS),
             InMemorySaver(serde=build_serializer()),
+            _eval_corpus(),
         )
         await graph.ainvoke(
             {"question": case["question"]},

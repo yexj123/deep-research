@@ -2050,6 +2050,42 @@ arXiv grows ~100 GB a month, and silence is this project's recurring failure (D-
 actually as good. The argument above is an inference from two measurements, not a measurement
 of the thing itself. It needs a `LOCAL_FIRST=true` arm recorded against the current default.
 
+### D-106 — Coverage also requires the corpus to hold every term
+
+**A threshold validated on one input distribution, applied to another, is not validated.**
+D-104 measured the half-the-terms rule on whole *questions* -- 7 to 12 terms each. Production
+feeds it *subtopics*, which the planner writes at 2 to 4 terms. At that length "half the
+terms" can be a single generic word.
+
+Caught before the paid arm, by re-running D-104's control on subtopic-length inputs:
+
+| probe | terms | strongly matching |
+|---|---|---|
+| `self-attention mechanism` | 3 | 20 |
+| `coral reef bleaching` | 3 | 0 |
+| **`CRISPR off-target effects`** | 4 | **20** |
+
+`CRISPR off-target effects` scored **full coverage against a machine-learning corpus**, because
+*target* and *effects* are ordinary ML words while *crispr* matched nothing at all. The rule
+was measuring incidental vocabulary overlap.
+
+**Fix: every query term must appear somewhere in the corpus**, checked with one `LIMIT 1`
+query per term, short-circuiting on the first absent one. A corpus that holds no paper
+containing *crispr* does not cover a CRISPR subtopic, however many papers mention *target*.
+
+Re-measured across 21 probes -- 10 in-domain (subtopics and questions), 11 out-of-domain:
+**every in-domain probe has all terms present; every out-of-domain probe has at least one
+absent.** No overlap, including the CRISPR case the half-rule missed.
+
+The check respects `tier`, so a term appearing only in full text cannot make an
+abstracts-only arm look covered -- otherwise the tier filter leaks and the comparison arm
+answers locally on the strength of text it was configured not to use (D-088).
+
+**Why this was found at all:** the coverage rate on real recorded subtopics came out at
+**100%**, which is a number worth distrusting rather than celebrating. Checking *why* it was
+100% is what surfaced the distribution mismatch. It is still 100% after the fix, because the
+seeded corpus genuinely holds these questions' papers -- but now for the right reason.
+
 ## Open (proposed, not decided)
 
 **Settled 2026-09-20:** O-1 → D-064, O-2 → D-065, O-3 → D-066.

@@ -264,6 +264,17 @@ def strongly_matching_papers(
     except ValueError:
         return []
 
+    # **Every term must appear somewhere in the corpus** (D-106). The half-rule alone was
+    # validated on whole questions (7-12 terms) but production feeds it *subtopics* (2-4),
+    # where "half" can be one generic word. Measured: "CRISPR off-target effects" scored full
+    # coverage against a machine-learning corpus, because "target" and "effects" are common ML
+    # words while "crispr" matched nothing at all. Requiring the whole vocabulary to be present
+    # separates all 10 in-domain probes from all 11 out-of-domain ones with no overlap.
+    #
+    # Cheap: one LIMIT 1 query per term, short-circuiting on the first absent one.
+    if not all(search(db, term, 1, tier) for term in terms):
+        return []
+
     top = covering_papers(db, query, limit, tier)
     if not top:
         return []
