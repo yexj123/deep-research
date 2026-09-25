@@ -180,7 +180,13 @@ primary failure mode, so these are stated rather than buried:
 - **Every run reports what it didn't cover.** Failed searches, subtopics where nothing was
   published, malformed entries, and *why* the run stopped — because "the depth limit cut this
   off" and "the search converged" mean very different things.
-- **arXiv only.** Semantic Scholar is designed for but not built.
+- **arXiv only — and more deeply than "a second source isn't written yet."** `Source` is an
+  *arXiv* paper: its ID is the corpus primary key, and `[arXiv:<id>]` is the citation contract
+  the grounding check is built on. Adding a non-arXiv source means changing what a paper is,
+  not implementing an interface — there isn't one. Semantic Scholar is also not an option:
+  it no longer approves API keys for third-party apps, and its unauthenticated tier returned
+  429 on every attempt. OpenAlex is open and CC0, but **69% of its results carry no arXiv ID**
+  (measured, 75/240 over 12 real subtopics). See `O-17`.
 - **English-first.** Non-ASCII terms work, but stopword removal is English-only.
 - **Single-user, no auth.** Intended for localhost. If you expose it, put a password in front.
 - **Abstracts, not full text — and that is a measured choice, not a missing feature.** Full
