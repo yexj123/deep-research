@@ -37,6 +37,7 @@ from deep_research.agent.sources.fulltext import (
 )
 from deep_research.agent.sources.rate_limit import ArxivRateLimiter
 from deep_research.persistence.corpus import (
+    FULL_TEXT,
     connect,
     index_full_text,
     index_sources,
@@ -75,10 +76,22 @@ def papers_in_recorded_contexts(arms: tuple[str, ...] | None = DEFAULT_ARMS) -> 
     return list(seen)
 
 
-async def enrich(limit: int | None, corpus_path: Path = CORPUS_PATH) -> None:
+async def enrich(limit: int | None, corpus_path: Path = CORPUS_PATH, force: bool = False) -> None:
     db = connect(str(corpus_path))
     try:
         index_sources(db, all_recorded_papers())
+        if force:
+            # Drop the full-text tier and re-fetch. Needed to *measure* a chunking change:
+            # `papers_without_full_text` correctly skips papers already read, so a fix to how
+            # chunks are built is invisible until the old chunks are cleared (D-115).
+            # Abstracts and `indexed_at` are untouched, so the staleness history survives.
+            before = db.execute(
+                "SELECT COUNT(*) FROM chunks WHERE tier = ?", (FULL_TEXT,)
+            ).fetchone()[0]
+            with db:
+                db.execute("DELETE FROM chunks WHERE tier = ?", (FULL_TEXT,))
+                db.execute("UPDATE papers SET has_full_text = 0")
+            print(f"--force: cleared {before} full-text chunks\n")
         todo = papers_without_full_text(db, papers_in_recorded_contexts())
         if limit is not None:
             todo = todo[:limit]
@@ -127,8 +140,13 @@ def main() -> int:
     parser.add_argument(
         "--limit", type=int, default=None, help="enrich at most N papers (pilot first)"
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="clear the full-text tier and re-fetch; needed to measure a chunking change",
+    )
     args = parser.parse_args()
-    asyncio.run(enrich(args.limit))
+    asyncio.run(enrich(args.limit, force=args.force))
     return 0
 
 
