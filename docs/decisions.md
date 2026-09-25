@@ -2621,6 +2621,10 @@ Two tests: a locally-answered subtopic must never print "Searching arXiv", and -
 would pass the first test while leaving a long wait unexplained on screen.
 
 ### D-119 - The fence hypothesis was wrong, and D-070 is still open
+> **Partly corrected -> D-120.** This tested the *first-round* planner prompt. The
+> second-round prompt, which is where D-089's failures occurred, fences **1 time in
+> 120**. The fix does prevent a real planner failure; the attribution to D-089's
+> 1-in-10 magnitude is still wrong, and D-070 still open.
 
 D-117 proposed markdown code fences as the likely cause of D-089's *"1 run in 10 died with
 `ValidationError` on an unparseable plan"*, and said so as a hypothesis. **Measured: it is
@@ -2665,6 +2669,54 @@ plausible mechanism, offered as one, and it would take its own 120 trials to est
 
 **Cost:** 140 planner calls, no arXiv, no synthesis, a few minutes. Cheap enough that "measure
 it" should have been the first response to the hypothesis rather than the second.
+
+### D-120 - D-119 tested the wrong prompt. The fence is real, and still does not explain D-089
+
+D-119 measured 120 planner calls, found zero fenced replies, and concluded the fence
+hypothesis was "excluded". **It tested the first-round prompt.** A run's *second* `decompose`
+call gets a different one -- it carries the `Already explored (propose something new)` list,
+which is longer and more constrained. That is the prompt D-089's failures came from, and it
+was the one not tested.
+
+Re-measured with the explored list populated from real recorded subtopics, 120 trials:
+
+| prompt | trials | fenced | would fail without the fix | fails with it |
+|---|---|---|---|---|
+| first round (D-119) | 120 | 0 | 0 | 0 |
+| **second round** | 120 | **1 (0.8%)** | **1** | **0** |
+
+The one failure, verbatim:
+
+```
+```json
+{"subtopics": ["Memory efficiency in mixture-of-experts architectures", ...
+```
+
+**So D-117's fix prevents a real planner failure after all**, which D-119 denied. The
+attribution to D-089's *magnitude* is still wrong, and that part of D-119 stands: pooled,
+**1 failure in 240 calls = 0.42%**, with a 95% upper bound near 2%. D-089's implied ~3% per
+call remains excluded, and 0.8% of second-round calls cannot produce 1 run in 10 -- especially
+now that D-096's adaptive exits mean most runs make only *one* planner call at all.
+
+**D-089's 1-in-10 is still unexplained, and D-070 stays open.**
+
+---
+
+**The methodological error is the point, and it is mine, twice over.** D-119 corrected D-117
+for over-claiming, then over-corrected by measuring a prompt the failure did not occur in --
+and reported "excluded" with a confident p-value attached. A precise number computed over the
+wrong population is more misleading than no number, because it *looks* like it settles
+things.
+
+The tell was available and ignored: D-089 described failures *inside runs*, and a run's
+planner calls are not all the same call. Testing the easy prompt rather than the one named in
+the report is the same shape as D-104's negative control drawn from the positive population --
+an experiment that answers a question adjacent to the one asked.
+
+**Three passes to get one small fact right**, at 260 planner calls total and a few minutes
+each. That is cheap, and it is the honest cost of a claim about a rare event: the first
+attempt was underpowered, the second was aimed wrongly, and only the third looked where the
+failure was reported to live.
 
 ## Open (proposed, not decided)
 
