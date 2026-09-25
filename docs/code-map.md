@@ -307,9 +307,14 @@ sees an ordinary standalone question and needs no second code path (D-121).
 model. **Never raises, never returns empty** — every failure path returns the original
 question, the same additive-feature rule as D-113.
 
-### `agent/nodes/check_claims.py` [D-113]
-**Defines:** `make_check_claims` (a closure over the model factory, D-032), `extract_claims`,
-`system_prompt`, and the `Judgement` / `ClaimReport` validation models.
+### `agent/nodes/check_claims.py` [D-113, D-123]
+**Defines:** `make_check_claims` (a closure over the model factory, D-032), `SENTENCE_SPLIT`,
+`BLOCK_MARKER`, `extract_claims`, `system_prompt`, and the `Judgement` / `ClaimReport`
+validation models.
+**`SENTENCE_SPLIT` treats a markdown block boundary as a claim boundary** (D-123) — a blank
+line, or a newline before a heading, bullet, numbered item or quote — because the capital-letter
+rule (D-115) was written for prose and a review is markdown. Without it, 1 claim in 9 was a
+merged block spanning up to 10 blocks, and an "unsupported" verdict on one is unattributable.
 **Uses:** `check_citations.CITATION_MARKER`, `synthesize.new_fence`, `config.MAX_CLAIMS_CHECKED`.
 **Used by:** `graph.py`, between `synthesize` and `check_citations`.
 
@@ -590,6 +595,7 @@ Claude writes and maintains every file here (since 2026-09-19; see `CLAUDE.md`).
 | `eval/enrich.py` [D-108] | The offline full-text pass: fetch, chunk and index papers the recorded contexts used, rate-limited like a search. A script rather than a graph node **because the production question only matters if full text helps** -- and it did not (D-111) | `sources/fulltext`, `persistence/corpus` |
 | `eval/corpus_coverage.py` [D-104, D-106] | Derives `MIN_LOCAL_PAPERS` from committed recordings with no API key. Holds the frozen `OUT_OF_DOMAIN` control -- the negative population the first version of this experiment lacked | `persistence/corpus`, `recording.load_all` |
 | `eval/compare.py` [D-094] | Paired comparison of two arms, run as `python -m tests.eval.compare <arm-a> <arm-b>`. Pairs by question id, reports the mean paired difference in standard errors, and refuses arms that share no questions | `recording.load_all`, `results.json` |
+| `eval/claim_split.py` [D-123] | What the markdown-splitting bug cost, over the committed recordings: old rule vs fixed, how many claims were merged blocks, and whether the extra claims push any review past `MAX_CLAIMS_CHECKED`. Free and exact — claim extraction is a pure function of the review text, so no API key and no judge. Keeps its own copy of the **old** regex, so the comparison survives the fix | `check_claims`, `recording.load_all` |
 | `eval/test_compare.py` [D-094] | The analysis arithmetic on synthetic arms with hand-computable answers: pairing by id not position, unshared questions excluded, zero-variance metrics reporting no SE rather than infinity — plus a check that the module still reproduces the numbers D-094's prose quotes | `compare.py` |
 | `eval/test_question_sets.py` [D-088, O-14] | The sets stay well-formed: ids unique within *and across* sets (they key `results.json`), an unknown set name raises rather than silently recording the default, and each file states its own append-only rule | `recording.load_questions` |
 | `eval/metrics.py` [D-093] | `numeric_density` and `citation_density` (deterministic, free) plus `specificity_metric` (G-Eval). The free measurement stays primary (D-088) | `deepeval.GEval` |

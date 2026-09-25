@@ -2820,6 +2820,75 @@ returning it here avoids a second request to find out what their question became
   as a subtopic plan. Split into `models_built` (history, never rewound) and a private
   position that `restart()` rewinds.
 
+### D-123 - A "claim" could span four paragraphs, because a review is markdown, not prose
+
+`SENTENCE_SPLIT` broke on `[.!?]` + whitespace + an **uppercase letter**. The capital was the
+deliberate part (D-115): it stops "Smith et al." ending a sentence, and it handles every
+abbreviation at once without a word list.
+
+**But the synthesis prompt asks for headings and numbered lists**, so the text after a full
+stop is routinely `\n\n4. **Post-Training...`, `\n\n## Open Problems` or `\n- **Foo**`. None of
+those begin with a capital *letter*, so no boundary was found and the sentence kept absorbing.
+
+Found by reading a real coverage panel, not by a test. The flagged claim, verbatim, ran from a
+bullet through a heading into a numbered list — four paragraphs, six citations, judged as one
+claim:
+
+```
+It leverages low-bit quantization formats for effective model size reduction [arXiv:2509.04244].
+
+4. **Post-Training Quantization Techniques**: Approaches like AWEQ and SEPTQ ...
+
+## Open Problems
+
+While quantization can drastically speed up inference, challenges remain:
+
+1. **Accuracy Degradation**: Reducing precision can lead to a loss of accuracy ...
+```
+
+**What it cost, measured over the 140 committed recordings** (free and exact — claim
+extraction is a pure function of the review text, so no API key and no judge):
+
+| | claims found | merged blocks | share |
+|---|---|---|---|
+| old rule | 921 | 102 | **11.1%** |
+| fixed | 1129 | — | — |
+
+**One claim in nine was a merged block**, holding 3.0 markdown blocks on average and up to
+**10**. The fix recovers 208 claims — **23% more claims checked per review**. Claims per review
+go from a median of 8 to a max of 12, so nothing comes near `MAX_CLAIMS_CHECKED = 25` and no
+review flips to truncated (checked, 0 of 140).
+
+Two distinct costs, and the first is the worse one:
+
+1. **An "unsupported" verdict on a merged block is unattributable.** The checker is shown a
+   mixture of four statements and six citations and returns one boolean. Which part failed is
+   unrecoverable, so the panel tells the reader to go and check something without saying what.
+2. **Fewer sentences qualified as claims at all** — 208 of them, never verified.
+
+**Decision:** a markdown block boundary is also a claim boundary — a blank line, or a newline
+directly before a heading, bullet, numbered item or quote. The opening marker is stripped from
+the claim text, so the checker is shown a statement rather than `4. **Foo**: ...` and the
+coverage panel renders one bullet instead of reopening the review's numbering inside itself.
+
+**Rejected:**
+- *A real sentence tokenizer* (nltk/spaCy) — a dependency and a model download to fix a
+  problem that is not about sentences: the failures were all block structure, which a prose
+  tokenizer also does not model.
+- *Rendering the markdown and splitting the text* — throws away the structure that carries the
+  boundary, and puts an HTML parse in the path of a verification step.
+- *Splitting on every newline* — breaks a wrapped list item into fragments, which is D-115's
+  bug in the other direction. `test_prose_inside_one_list_item_is_still_one_claim` is the
+  control, and it passes with **and** without this change, which is the point of it.
+
+**Verified live** on a fresh run: six flagged claims, each one sentence with one citation and a
+specific reason. Before the fix, the same shape of review produced one blob.
+
+**The suite could not have caught this**, and that is the lesson worth keeping: every fixture
+review in `test_check_claims.py` was prose, because the tests were written from the *rule* and
+not from real model output. The rule was tested thoroughly against the inputs it was designed
+for. `tests/eval/claim_split.py` now measures the real ones.
+
 ## Open (proposed, not decided)
 
 **Settled 2026-09-20:** O-1 → D-064, O-2 → D-065, O-3 → D-066.

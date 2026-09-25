@@ -15,12 +15,11 @@ Backed by `CLAUDE.md`, the output style, and `Edit(/tests/**)`, `Edit(/docs/**)`
 
 ## Do next (you)
 
-- [ ] **A "claim" can span four paragraphs.** `SENTENCE_SPLIT` (`check_claims.py:62`) only
-      breaks on `[.!?]` followed by whitespace and an **uppercase letter** — but reviews are
-      markdown, where the next block starts with `4.`, `##` or `**`. Seen live: one flagged
-      claim ran from a bullet through a heading into a numbered list, six citations in one
-      blob. Two costs: the checker judges an unsplittable mixture, so "unsupported" says
-      nothing about *which* part; and fewer sentences qualify as claims at all
+- [x] **A "claim" could span four paragraphs → D-123.** `SENTENCE_SPLIT` only broke before an
+      uppercase *letter*, but reviews are markdown, where the next block starts `4.`, `##` or
+      `- `. Measured over the 140 recordings: **1 claim in 9 was a merged block** (102 of 921),
+      3.0 blocks each and up to 10; the fix recovers 208 claims, **23% more checked per
+      review**, with nothing near the cap of 25. Verified live
 - [ ] **Semantic Scholar as a second source** — the `sources/` package was designed for it
       and has only ever had one implementation, so the abstraction is untested
 - [ ] **D-070: the planner repair-retry is still open** (D-120). Re-measured on the *second-round*
@@ -110,7 +109,7 @@ died on an unparseable plan"*.
 **one section in ten** (28.9 → 31.7 chunks per paper). D-115 had said that was unmeasurable;
 it was not, because the corpus is regenerable.
 
-## Multi-turn sessions shipped (D-121, D-122) — 2026-09-25
+## Multi-turn sessions shipped (D-121, D-122, `f369fc6`) — 2026-09-25
 
 The app looked like a chat and behaved like a one-shot form. Now a finished conversation has a
 follow-up composer, and "What about quantization?" becomes a real research question.
@@ -136,9 +135,12 @@ silently beat `[hidden] { display: none }`, so the composer would have shipped p
 visible; and `RecordingFactory` conflated "models built" with "position in the script", so the
 first test to run the graph twice got the claim checker's JSON handed to `decompose`.
 
-**And one bug found by looking at a real coverage panel:** `SENTENCE_SPLIT` in
-`check_claims.py` only breaks before an uppercase *letter*, but reviews are markdown — see the
-"Do next" item below.
+**And one bug found by looking at a real coverage panel → D-123.** `SENTENCE_SPLIT` only broke
+before an uppercase *letter*, but reviews are markdown. One flagged claim ran from a bullet
+through a heading into a numbered list: four paragraphs, six citations, one boolean. Measured
+over the recordings, **1 claim in 9 was a merged block**, and the fix checks 23% more claims
+per review. The suite could not have caught it — every fixture review was prose, because the
+tests were written from the rule rather than from real model output.
 
 ## /demo-check, 2026-09-25 — passed, after fixing what it found
 

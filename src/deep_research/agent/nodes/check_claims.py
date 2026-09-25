@@ -59,7 +59,27 @@ CheckClaimsNode = Callable[[ResearchState, Runtime[RunContext]], Awaitable[dict[
 # The cost is a genuine boundary followed by a lowercase word, which does not happen in prose
 # the synthesis prompt asks for. Still deliberately simple: a full sentence tokenizer would
 # give false precision to something that only has to group a claim with its citation.
-SENTENCE_SPLIT: re.Pattern[str] = re.compile(r"(?<=[.!?])\s+(?=[A-Z])")
+#
+# **The capital rule alone was not enough, because a review is markdown, not prose** (D-123).
+# The synthesis prompt asks for headings and numbered lists, so the text after a sentence's
+# full stop is routinely `\n\n4. **Post-Training...`, `\n\n## Open Problems` or `\n- **Foo**`.
+# None of those start with a capital *letter*, so no boundary was found and the "sentence"
+# kept absorbing. Seen live: one flagged claim ran from a bullet, through a heading, into a
+# numbered list -- four paragraphs and six citations judged as a single claim, which makes
+# "unsupported" unattributable to any part of it.
+#
+# So a markdown block boundary is also a claim boundary: a blank line, or a newline directly
+# before a heading, bullet, numbered item or quote.
+SENTENCE_SPLIT: re.Pattern[str] = re.compile(
+    r"(?<=[.!?])\s+(?=[A-Z])"  # ordinary prose boundary
+    r"|\n\s*\n"  # a blank line: a markdown block boundary
+    r"|\n(?=\s*(?:#{1,6}\s|[-*+]\s|\d+[.)]\s|>))"  # a heading, bullet, item or quote
+)
+
+# The marker that opened a block, once it is a claim on its own. Kept out of the claim text so
+# the checker is shown a statement rather than "4. **Foo**: ...", and so the coverage panel
+# renders one bullet instead of reopening the review's numbering inside it.
+BLOCK_MARKER: re.Pattern[str] = re.compile(r"^(?:#{1,6}\s+|[-*+]\s+|\d+[.)]\s+|>\s*)")
 
 
 class Judgement(BaseModel):
@@ -132,7 +152,7 @@ def extract_claims(review: str, known_ids: set[str]) -> list[tuple[str, tuple[st
             )
         )
         if cited:
-            claims.append((sentence.strip(), cited))
+            claims.append((BLOCK_MARKER.sub("", sentence.strip()).strip(), cited))
     return claims
 
 

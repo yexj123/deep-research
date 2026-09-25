@@ -34,6 +34,9 @@ from tests.agent.fakes import RecordingFactory, claim_report, make_source
 
 PAPER = "2411.18583"
 OTHER = "2502.00306"
+# A third id, for the markdown-splitting tests (D-123): the live failure merged three
+# separately-cited blocks, and two ids cannot show a three-way split.
+THIRD = "2309.14717"
 
 
 def _state(review: str, **overrides) -> ResearchState:
@@ -410,6 +413,106 @@ def test_genuine_sentence_boundaries_still_split() -> None:
 
     assert len(claims) == 2
     assert claims[0][1] == (PAPER,) and claims[1][1] == (OTHER,)
+
+
+# ---- markdown block boundaries (D-123) ------------------------------------------------
+
+
+def test_a_numbered_list_item_does_not_continue_the_previous_claim() -> None:
+    """A review is markdown, and `4.` is not a capital letter (D-123).
+
+    The capital-letter rule (D-115) was written for prose. The synthesis prompt asks for
+    numbered lists, so the text after a full stop is routinely `\\n\\n4. **Foo**: ...` --
+    which the rule does not see as a boundary, so the sentence keeps absorbing.
+    """
+    review = (
+        f"3. **APoT**: it leverages low-bit formats [arXiv:{PAPER}].\n"
+        f"\n"
+        f"4. **AWEQ**: it modifies weights post-training [arXiv:{OTHER}]."
+    )
+    claims = extract_claims(review, {PAPER, OTHER})
+
+    assert len(claims) == 2, f"one blob instead of two claims: {claims}"
+    assert claims[0][1] == (PAPER,) and claims[1][1] == (OTHER,)
+    # The marker itself is not part of the claim: the checker should be shown a statement,
+    # and the coverage panel should render one bullet rather than reopening the numbering.
+    assert claims[0][0].startswith("**APoT**"), claims[0][0]
+
+
+def test_a_heading_ends_a_claim() -> None:
+    """`## Open Problems` is a block boundary, and `#` is not a capital letter (D-123)."""
+    review = (
+        f"Quantization reduces memory [arXiv:{PAPER}].\n"
+        f"\n"
+        f"## Open Problems\n"
+        f"\n"
+        f"Accuracy degrades at low bitwidths [arXiv:{OTHER}]."
+    )
+    claims = extract_claims(review, {PAPER, OTHER})
+
+    assert len(claims) == 2, f"the heading did not end the claim: {claims}"
+    assert "Open Problems" not in claims[0][0]
+
+
+def test_consecutive_bullets_are_separate_claims() -> None:
+    """List items with no blank line between them still split (D-123).
+
+    A single `\\n` before `-` is the tighter form of the same boundary, and the one a model
+    produces most often.
+    """
+    review = (
+        f"- Tiling helps [arXiv:{PAPER}]\n"
+        f"- Routing differs [arXiv:{OTHER}]"
+    )
+    claims = extract_claims(review, {PAPER, OTHER})
+
+    assert len(claims) == 2, f"consecutive bullets merged: {claims}"
+    assert claims[0][0] == f"Tiling helps [arXiv:{PAPER}]"
+
+
+def test_the_live_failure_from_a_real_review_splits(capsys) -> None:
+    """The exact text that exposed D-123, trimmed to its shape.
+
+    Observed on a real follow-up run: one flagged claim ran from a bullet, through a heading,
+    into a numbered list -- four paragraphs and six citations judged as a single claim, which
+    makes "unsupported" unattributable to any part of it. The bug was invisible in the test
+    suite because every fixture review was prose.
+    """
+    review = (
+        f"3. **APoT Quantization**: It leverages low-bit quantization formats for effective "
+        f"model size reduction [arXiv:{PAPER}].\n"
+        f"\n"
+        f"4. **Post-Training Quantization**: Approaches like AWEQ simplify quantization by "
+        f"only modifying model weights post-training [arXiv:{OTHER}].\n"
+        f"\n"
+        f"## Open Problems\n"
+        f"\n"
+        f"While quantization can drastically speed up inference, challenges remain:\n"
+        f"\n"
+        f"1. **Accuracy Degradation**: Reducing precision can lead to a loss of accuracy "
+        f"[arXiv:{THIRD}]."
+    )
+    claims = extract_claims(review, {PAPER, OTHER, THIRD})
+
+    assert len(claims) == 3, f"expected three claims, got {len(claims)}: {claims}"
+    assert [c[1] for c in claims] == [(PAPER,), (OTHER,), (THIRD,)]
+    # Each claim carries exactly one citation. Before the fix the first one carried all three.
+    assert all(len(c[1]) == 1 for c in claims)
+
+
+def test_prose_inside_one_list_item_is_still_one_claim() -> None:
+    """The control for the markdown rules: a block boundary is not any newline (D-123).
+
+    A wrapped list item must not become several claims, or the fix would trade one splitting
+    bug for the opposite one.
+    """
+    review = (
+        f"- **AWEQ** simplifies quantization by modifying\n"
+        f"  weights post-training [arXiv:{PAPER}]"
+    )
+    claims = extract_claims(review, {PAPER})
+
+    assert len(claims) == 1, f"a wrapped line was split: {claims}"
 
 
 @pytest.mark.asyncio
