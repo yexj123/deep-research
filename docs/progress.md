@@ -53,6 +53,49 @@ Backed by `CLAUDE.md`, the output style, and `Edit(/tests/**)`, `Edit(/docs/**)`
       recordings: **2 in 1103 citations = 0.18 per 100**, and two events cannot support a
       depth rate. Closes D-079's open item; the live risk is claim *support*, not ID validity
 
+## Since O-13: the claim checker, and eight bugs it took a live run to find
+
+**O-12 settled (D-113).** `check_claims` asks, in one call, whether each cited sentence is
+supported by the paper it cites, reading **exactly what the writer read**. Verified live: it
+caught an invented *"94.3% ROUGE-L"*. A product feature, not a thesis metric, so it stays out
+of `compare.py`.
+
+**D-022 retired (D-114).** Its paper-overlap rule was never implemented, and D-094 measured a
+10% round-to-round overlap against its 60% threshold. `seen_paper_ids` is out of the `Send`
+payload, where it was being checkpointed on every fan-out and read by nobody.
+
+**Eight bugs, found in three passes.** Worth recording as a group, because the split between
+them is the lesson:
+
+| Found by | Bugs | What they had in common |
+|---|---|---|
+| Reading the code with tests written to fail first | **6** (D-115) | five reported success for work that had not happened |
+| Re-running enrichment to measure one of them | **1** (D-116) | pypdf truncates extraction and only *warns* |
+| Driving the real app (`/demo-check`) | **2** (D-117, D-118) | neither was reachable by the suite as written |
+
+**D-117 is the one that matters beyond this project.** A model wrapped its JSON in a markdown
+fence, and `model_validate_json` rejected it. The same code had passed an isolated test an
+hour earlier that happened to get a bare object — so a single manual check cannot find it, and
+a unit test with a scripted reply never will. **`decompose` had the same flaw from the
+beginning**, which makes it the likeliest explanation for D-089's long-standing *"1 run in 10
+died on an unparseable plan"*.
+
+**D-116 measured what a silent bug had cost**: the duplicate-heading collision was discarding
+**one section in ten** (28.9 → 31.7 chunks per paper). D-115 had said that was unmeasurable;
+it was not, because the corpus is regenerable.
+
+## /demo-check, 2026-09-25 — passed, after fixing what it found
+
+Three live runs. Startup clean, all three stream modes in order, 7 citations per run with no
+violations, markdown rendered without raw HTML, **console at 0 errors and 0 warnings**.
+
+**The headline confirmation:** local-first works end to end on a cold-then-warm sequence —
+run 3 repeated run 1's question and answered all three subtopics from the corpus with **zero
+arXiv requests, 6.9 s against 20.0 s (−66%)**, matching D-107's recorded −65%.
+
+**On flakiness:** three clean runs is not a flakiness measurement, and D-117 is exactly why —
+a bug that appears on *some* model samples survived a green suite and a passing manual test.
+
 ## Milestone 6 (O-13) settled — the corpus pays, full text does not
 
 **Done, and written up in [`findings.md`](findings.md).**
@@ -240,6 +283,9 @@ bounds it, and `recursion_limit` is a backstop that should never fire.
 - **`recursion_limit` minimum is 13**, found by bisection on the real graph shape — 12 raises
   `GraphRecursionError`. `RECURSION_LIMIT = 15` leaves two steps of headroom, and a test asserts
   a full-depth run fits. The skill previously advised 150, ~11× the real need.
+  > **Now 14, since `check_claims` landed (D-113).** A node on the terminal path costs one
+  > super-step, so the constant's headroom halved without the constant changing.
+  > `test_recursion.py` was the only thing that noticed.
 - **The limit is independent of `MAX_SUBTOPICS`:** a `Send` fan-out is one super-step however
   wide. More subtopics cost wall-clock (D-064's rate limiting), never recursion budget.
 

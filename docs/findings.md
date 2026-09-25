@@ -170,6 +170,12 @@ does not drive quality — topical relevance does, and the corpus has that (D-10
 Safe on a cold corpus by construction: an empty corpus covers nothing, so a first run falls
 through to arXiv unchanged.
 
+**Confirmed outside the harness**, on a live cold-then-warm sequence through the running app
+(2026-09-25). A first run of a question made 3 arXiv searches and took **20.0 s**, seeding the
+corpus; the same question asked again answered all three subtopics locally with **zero arXiv
+requests in 6.9 s — −66%**, against the recorded arm's −65%. This is the only one of the four
+premises whose measured effect also shows up as something a user would notice.
+
 ---
 
 ## What this cost

@@ -15,9 +15,14 @@ Design reasoning lives in [`decisions.md`](decisions.md); what each file does is
 ## 1. The agent run
 
 Question in, cited review out. At milestone 4 the graph recurses — the planner proposes
-subtopics, workers search them in parallel, and `gap_check` decides whether another round is
-worth it. Every value below is real, captured by running the graph against the saved arXiv
-fixture with the fake model.
+subtopics, workers answer them from the local corpus or search arXiv in parallel, and
+`gap_check` decides whether another round is worth it. Every value below is real, captured by
+running the graph against the saved arXiv fixture with the fake model.
+
+**Two things to hold in mind while reading, because both overturned the original design.**
+Recursion is bounded not by its ceiling but by adaptive exits that stop 19 of 20 runs after a
+single round — rounds two and three were measured as adding nothing (D-094, D-096). And the
+worker's first move is a *local* lookup, not a network call (D-105).
 
 ```text
 START → intake → decompose → (Send per subtopic) → research_worker → gap_check
@@ -107,7 +112,36 @@ If `pending_subtopics` is empty it returns the node name `"synthesize"` instead.
 
 ### Step 4 — `research_worker` (one per subtopic, in parallel)
 
-Builds a query from **its subtopic**, not the question:
+**The corpus is asked first, and the network only if it cannot answer** (D-105):
+
+```
+subtopic
+  ├─ ≥ MIN_LOCAL_PAPERS papers matching ≥ half its terms,
+  │  AND every term present somewhere in the corpus?      (D-104, D-106)
+  │
+  ├─ yes → use those papers. No HTTP request at all.
+  │
+  └─ no  → search arXiv, then index every result's abstract on the way through
+```
+
+Measured on live runs of the same question: **20.0 s cold, 6.9 s warm, 0 arXiv requests the
+second time**. The recorded arm puts it at 65 arXiv requests down to 1 across 20 questions,
+with every quality metric inside 2 SE (D-107).
+
+Indexing is what makes it compound, and it is free: those abstracts were already fetched and
+paid for by a search the run needed anyway. Without it they are used once and discarded.
+
+Two things about the coverage test are easy to get wrong, and both were:
+
+- **It counts term coverage, not papers.** O-13 originally specified "≥ N distinct papers in
+  the top-k", which returns k for *every* query in *every* corpus — a 1669-paper machine
+  learning corpus asked about medieval Flemish guilds still returned 20 (D-104).
+- **Every query term must appear somewhere.** Without that, *"CRISPR off-target effects"*
+  scored full coverage against that same ML corpus, because *target* and *effects* are
+  ordinary ML words while *crispr* matched nothing (D-106).
+
+When the corpus cannot answer, the worker builds a query from **its subtopic**, not the
+question:
 
 ```
 "attention mechanisms" → build_search_query() → "all:attention AND all:mechanisms"
