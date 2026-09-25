@@ -31,10 +31,17 @@ from deep_research.persistence.corpus import (
 
 
 class SubtopicTask(TypedDict):
-    """The Send payload. A TypedDict, because Send payloads are checkpointed too (D-071)."""
+    """The Send payload. A TypedDict, because Send payloads are checkpointed too (D-071).
+
+    **`seen_paper_ids` used to travel here and no longer does (D-114).** It existed for
+    D-022's paper-overlap rule -- skip a subtopic when >=60% of its results are already seen --
+    which was specified, plumbed, and never implemented. D-094 then measured why it could not
+    work: rounds are near-disjoint, with `attention` round 2 finding 30 papers of which **27
+    were new**, a 10% overlap against a 60% threshold. The rule would have fired approximately
+    never, and the set was being checkpointed on every fan-out to feed it.
+    """
 
     subtopic: str
-    seen_paper_ids: set[str]
 
 
 WorkerNode = Callable[[SubtopicTask], Awaitable[dict[str, Any]]]

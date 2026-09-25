@@ -23,7 +23,10 @@ Backed by `CLAUDE.md`, the output style, and `Edit(/tests/**)`, `Edit(/docs/**)`
 - [x] **O-12 settled -> D-113** — the claim checker: one node, one call, reading exactly
       what the writer read. Verified live (it caught an invented "94.3% ROUGE-L"). A
       product feature, not a thesis metric, so it stays out of `compare.py`
-- [ ] **Decide D-022's fate** — its per-subtopic overlap check is superseded for control flow by
+- [x] **D-022's fate decided → D-114** — the paper-overlap half is retired (never implemented;
+      D-094 measured 10% round-to-round overlap against its 60% threshold), and
+      `seen_paper_ids` is out of the `Send` payload. The normalized-match half stays (D-017)
+- [ ] ~~Decide D-022's fate~~ — its per-subtopic overlap check is superseded for control flow by
       D-075; retire it, or keep the ratio as thesis evidence (see Open). **D-094 narrows this:**
       as a *novelty* signal it provably cannot fire, so the only live question is whether the
       ratio is worth keeping as evidence

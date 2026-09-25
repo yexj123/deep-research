@@ -150,7 +150,11 @@ and what was rejected. It's the answer to "why did you do it this way?"
   (a possible gap). Treating it as a failure would retry it and then quietly
   drop it.
 
-### D-022 — Subtopic comparison: normalized match plus paper overlap (X = 0.6)
+### ~~D-022~~ — Subtopic comparison: normalized match plus paper overlap (X = 0.6)
+> **Retired 2026-09-25 → D-114.** The normalized-match half stands and is in use (D-017). The
+> **paper-overlap half was never implemented**, and D-094 measured a 10% round-to-round
+> overlap against its 60% threshold — it could not have fired. `seen_paper_ids` no longer
+> travels in the `Send` payload.
 - **Decision:** a proposed subtopic is skipped if its normalized form
   (`casefold` + `strip`) is already in `explored_subtopics` (D-017), **or**
   if ≥ 60% of its search results are papers already in `seen_paper_ids`.
@@ -2428,6 +2432,39 @@ independent judge is what the thesis reports; this is what the reader sees. It i
 filters the `messages` stream with an **allowlist** (only `synthesize` passes), which is why
 adding it was safe -- a denylist naming the known non-review nodes would have leaked its JSON
 into the user's review the day it landed.
+
+### D-114 - D-022's paper-overlap rule is retired, and its payload with it
+
+**D-022 specified a rule that was never implemented, and D-094 later measured why it could not
+work.** The rule: skip a proposed subtopic when >=60% of its search results are papers already
+in `seen_paper_ids`. Only the plumbing was ever built -- `seen_paper_ids` travelled in every
+`Send` payload, was checkpointed on every fan-out, and `research_worker` read `task["subtopic"]`
+and nothing else.
+
+**The measurement that settles it** (D-094): rounds are near-disjoint. `attention` round 2
+found **30 papers, 27 of them new** -- a **10% overlap against a 60% threshold**. The rule
+would have fired approximately never, on the same evidence that killed the novelty-based
+semantic exit. It is the same finding wearing different clothes: *a broad arXiv query does not
+run out of new papers*, so nothing keyed on repetition can fire.
+
+**D-096 removed the last reason to keep it in reserve.** The adaptive exits stop 19 of 20 runs
+after a single round, so there is usually no second round for a repetition rule to act on.
+
+**Decision: retire the rule and remove `seen_paper_ids` from the Send payload.** A set of up to
+~80 ids, serialized into three payloads per round, checkpointed every time, feeding nothing.
+
+**Resuming an old checkpoint is safe.** A payload still carrying the key deserializes into a
+plain dict, the worker reads `subtopic`, and a `TypedDict` is not enforced at runtime -- the
+extra key is ignored rather than rejected.
+
+**The ratio survives as evidence, not as control flow.** D-022's real contribution was the
+*idea* of a measurable repetition statistic, and D-094 measured it offline from recordings.
+Nothing about that needs runtime plumbing: an evaluation question should be answered by the
+evaluation harness, not by carrying data through production in case someone asks later.
+
+**The test now asserts the payload's exact key set** rather than "subtopic is present", so
+anything added back has to be justified rather than accumulating unnoticed in something that
+gets checkpointed.
 
 ## Open (proposed, not decided)
 

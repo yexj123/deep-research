@@ -71,7 +71,7 @@ async def _run(corpus, subtopic=SUBTOPIC):
     stub = make_arxiv_stub(load_arxiv_fixture("search_ok.xml"))
     worker = make_research_worker(stub.client, ArxivRateLimiter(0.0), corpus)
     try:
-        update = await worker({"subtopic": subtopic, "seen_paper_ids": set()})
+        update = await worker({"subtopic": subtopic})
     finally:
         await stub.client.aclose()
     return update, stub.requests

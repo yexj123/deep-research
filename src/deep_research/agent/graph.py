@@ -48,13 +48,15 @@ def route_subtopics(state: ResearchState) -> str | list[Send]:
     """
     if not state.pending_subtopics:
         return "synthesize"
-    # A worker only sees its payload, so seen_paper_ids has to travel with it (D-022).
     # A plain dict (TypedDict at the type level): Send payloads are checkpointed, and a custom
     # class comes back as a dict on resume with only a logged warning (D-071).
-    return [
-        Send("research_worker", {"subtopic": topic, "seen_paper_ids": state.seen_paper_ids})
-        for topic in state.pending_subtopics
-    ]
+    #
+    # The payload carries the subtopic and nothing else. `seen_paper_ids` travelled here until
+    # D-114 retired D-022's overlap rule, which was never implemented and which D-094 measured
+    # as unable to fire -- a 10% round-to-round overlap against a 60% threshold. An old
+    # checkpoint still carrying the key resumes fine: the worker reads `subtopic` only, and a
+    # TypedDict is not enforced at runtime.
+    return [Send("research_worker", {"subtopic": topic}) for topic in state.pending_subtopics]
 
 
 def route_after_gap_check(state: ResearchState) -> str:

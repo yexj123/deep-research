@@ -39,7 +39,7 @@ async def _run_worker(corpus, subtopic: str = "attention mechanisms", body: str 
     stub = make_arxiv_stub(body if body is not None else load_arxiv_fixture("search_ok.xml"))
     worker = make_research_worker(stub.client, ArxivRateLimiter(0.0), corpus)
     try:
-        return await worker({"subtopic": subtopic, "seen_paper_ids": set()})
+        return await worker({"subtopic": subtopic})
     finally:
         await stub.client.aclose()
 
@@ -91,7 +91,7 @@ async def test_a_worker_without_a_corpus_behaves_exactly_as_before(corpus) -> No
     stub = make_arxiv_stub(load_arxiv_fixture("search_ok.xml"))
     worker = make_research_worker(stub.client, ArxivRateLimiter(0.0))
     try:
-        update = await worker({"subtopic": "attention mechanisms", "seen_paper_ids": set()})
+        update = await worker({"subtopic": "attention mechanisms"})
     finally:
         await stub.client.aclose()
 
@@ -157,7 +157,7 @@ async def test_a_failed_search_indexes_nothing(corpus) -> None:
     stub = make_arxiv_stub("not xml at all")
     worker = make_research_worker(stub.client, ArxivRateLimiter(0.0), corpus)
     try:
-        update = await worker({"subtopic": "attention mechanisms", "seen_paper_ids": set()})
+        update = await worker({"subtopic": "attention mechanisms"})
     finally:
         await stub.client.aclose()
 

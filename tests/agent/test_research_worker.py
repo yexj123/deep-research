@@ -19,7 +19,7 @@ async def run_worker(body: str, status_code: int = 200, subtopic: str = "attenti
     limiter = NullLimiter()
     async with stub.client:
         node = make_research_worker(stub.client, limiter)
-        update = await node({"subtopic": subtopic, "seen_paper_ids": set()})
+        update = await node({"subtopic": subtopic})
     return update, stub, limiter
 
 
@@ -109,7 +109,7 @@ async def test_a_transport_error_is_recorded_as_a_failed_subtopic() -> None:
     limiter = NullLimiter()
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         update = await make_research_worker(client, limiter)(
-            {"subtopic": "attention", "seen_paper_ids": set()}
+            {"subtopic": "attention"}
         )
 
     assert update["failed_subtopics"] == ["attention"]

@@ -191,7 +191,12 @@ def test_route_subtopics_sends_one_worker_per_subtopic() -> None:
     assert isinstance(sends, list)
     assert [s.node for s in sends] == ["research_worker", "research_worker"]
     assert [s.arg["subtopic"] for s in sends] == ["Self-attention", "Positional encoding"]
-    assert all(s.arg["seen_paper_ids"] == {"2411.18583"} for s in sends)
+    # The payload carries the subtopic and nothing else (D-114). `seen_paper_ids` travelled
+    # here for D-022's overlap rule, which was never implemented and which D-094 measured as
+    # unable to fire -- 10% round-to-round overlap against a 60% threshold. Asserted as an
+    # exact key set rather than "subtopic is present", so anything added back has to be
+    # justified rather than accumulating unnoticed in a checkpointed payload.
+    assert all(set(s.arg) == {"subtopic"} for s in sends)
 
 
 def test_route_subtopics_skips_to_synthesize_when_nothing_is_pending() -> None:
