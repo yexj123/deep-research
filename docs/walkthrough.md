@@ -265,6 +265,12 @@ Captured from a real call against that input, claim 2 came back:
   *judgement* means a finished, ID-verified review went unverified.
 - **It runs before `check_citations`** so `citations_checked` stays the last field any node
   writes — D-084 made it the terminal completion marker.
+- **"Sentence" means a markdown block too** (D-123). The example above is prose, which is what
+  makes it a bad test of the splitter: the rule breaks before a capital *letter*, and step 6
+  asks for headings and numbered lists, so `\n\n4. **Foo**...` and `\n\n## Open Problems` were
+  not boundaries at all. One claim in nine was a merged block spanning up to 10 of them —
+  and one boolean over four paragraphs cannot say which part failed. A blank line, or a
+  newline before a heading, bullet, numbered item or quote, now ends a claim.
 
 The evidence block carries the same nonce fence as the synthesis prompt (D-097). A checker is
 a *more* attractive injection target than a writer: text that talks its way past the thing
@@ -368,6 +374,30 @@ Six of these fields are written by **parallel** workers, so each needs a reducer
 raises `InvalidUpdateError` (D-067). `pending_subtopics`, `depth`, `seen_before_round` and
 `empty_before_round` have single writers and deliberately have none, as do `unsupported_claims` and
 `claims_checked`.
+
+### Where a follow-up fits — entirely before step 1
+
+A follow-up question does **not** appear anywhere in §1, and that is the design (D-121). It is
+resolved at run *creation*, in `POST /runs`, before a thread exists:
+
+```
+"What about quantization?"  +  the parent's question and review
+        │
+        ▼  agent/followup.py  (skipped entirely if the question already stands alone)
+"How does quantization speed up language model inference?"
+        │
+        ▼  recorded as an ordinary run, with parent_thread_id and session_id
+   ... step 0 onwards, exactly as above
+```
+
+So the graph has **no notion of a conversation**. Every run it sees is a first run with clean
+state, `depth` at 0 and nothing to migrate. What ties turns together is two columns on the
+`runs` table, and the continuity comes from the corpus — which covers *every* run ever made,
+filtered per subtopic, rather than one thread's leftovers.
+
+Captured from a real follow-up: *"What about quantization instead?"* became *"How does
+quantization speed up language model inference?"*, and the run finished in **10 seconds with
+no arXiv request at all**, every subtopic answered from the corpus.
 
 ---
 
@@ -492,6 +522,8 @@ and is worse than no example at all. Re-capture whenever any of these change:
 | A new reducer, or a field changing writer | the final-state block and the note under it |
 | A node added to the terminal path | the diagram, step headings, the stream-order block, **and `test_recursion.py`'s measured minimum** -- a node there costs one super-step (D-113 moved it 13 -> 14) |
 | A stopping rule added or changed (`agent/exits.py`) | step 5's condition list, the graph diagram's cycle label, and `stopped_because` in the final-state block |
+| `SENTENCE_SPLIT` or what counts as a claim | step 7's numbered-claims block and its bullets — and note that a **prose** example cannot exercise the markdown rules (D-123) |
+| The follow-up rewriter or the session columns | the "Where a follow-up fits" block and its captured rewrite |
 
 **How the values were captured:** the graph was run against the saved
 `tests/agent/fixtures/arxiv/search_ok.xml` fixture with `RecordingFactory` as the model
