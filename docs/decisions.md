@@ -2718,6 +2718,108 @@ each. That is cheap, and it is the honest cost of a claim about a rare event: th
 attempt was underpowered, the second was aimed wrongly, and only the third looked where the
 failure was reported to live.
 
+### D-121 - Follow-up questions: a fresh thread that inherits language, not state
+
+**A follow-up gets its own `thread_id` and its own clean graph state.** The only things tying
+turns together are two columns on the `runs` table -- `parent_thread_id` (what this turn was
+asked about) and `session_id` (the conversation it belongs to) -- and one model call that
+rewrites the question so it stands on its own.
+
+**The measurement came first, and it collapsed the design.** The plan was to carry `sources`,
+`seen_paper_ids` and `explored_subtopics` forward into the follow-up's state. Before building
+that, five follow-up-shaped subtopics were run against the 60-paper corpus two real runs had
+already built: **4 of 5 were covered locally**, and the fifth correctly fell through to arXiv.
+The corpus (D-105) already supplies research continuity, and supplies it better:
+
+| | corpus | carried state |
+|---|---|---|
+| scope | every run ever | one thread |
+| selection | BM25 per subtopic | everything, unfiltered |
+
+Worse, carrying `explored_subtopics` forward would have *actively broken* follow-ups: the
+planner filter (D-069) refuses to re-propose an explored subtopic, which is precisely what
+"tell me more about that" asks for. The feature would have been least useful on the questions
+it exists to serve.
+
+So the only thing a follow-up genuinely inherits is **language**. "What about quantization?"
+is not a research question; it is a question *about a previous answer*. `agent/followup.py`
+resolves it into one, and the ordinary pipeline then handles it with no special cases: no
+state migration, no `depth` reset, no checkpoint surgery, no second code path.
+
+**Deterministic first, model second.** `needs_context()` is a regex over pronouns and
+dependent openings. A question that already stands alone never reaches a model, so the common
+case costs nothing and cannot be corrupted by a rewrite. The regex is deliberately generous:
+a false positive costs one cheap call that returns the question unchanged, a false negative
+sends "what about it?" to arXiv as a literal search.
+
+**The rewrite happens at creation, not in the graph.** `POST /runs` rewrites before the thread
+exists, so what gets stored, streamed, and listed in history is the standalone question. One
+code path through the graph, and a history entry that reads as a real question.
+
+**It never raises and never returns empty.** Every failure path -- model error, empty reply,
+runaway reply -- returns the original question. Same reasoning as the claim checker (D-113):
+this is additive, and additive things must not break what they augment.
+
+Verified against a live model, four follow-ups to a real speculative-decoding review:
+
+| follow-up | result |
+|---|---|
+| "What about quantization?" | → "How does quantization speed up language model inference?" |
+| "How does it compare to pruning?" | → "How does speculative decoding compare to pruning in terms of speeding up language model inference?" |
+| "Does that work for vision models too?" | → "Does speculative decoding work for vision models too?" |
+| "What are the tradeoffs of post-training quantization...?" | unchanged, and **never reached the model** |
+
+End to end through the real server: "What about quantization instead?" became "How does
+quantization speed up language model inference?", and the run **finished in 10 seconds**
+entirely from the local corpus -- the continuity claim above, observed rather than argued.
+
+**Rejected:**
+- *Carrying graph state forward* -- the measurement above. Strictly worse than the corpus on
+  both scope and selection, and it breaks the planner filter.
+- *One thread per conversation, resumed* -- LangGraph's checkpoint resumes a run, it does not
+  start a second question within one. Reusing a thread would mean resetting `depth`, clearing
+  `pending_subtopics` and appending to `sources` by hand: checkpoint surgery on every turn.
+- *Rewriting inside `intake`* -- the graph would need the parent's review in its state, which
+  is the carried-state design again, and history would still store "What about it?".
+- *No rewrite, just prepend the previous question to the prompt* -- the subtopic planner and
+  the arXiv query builder both read `state.question`; a two-question string produces a
+  two-topic query that matches neither.
+
+### D-122 - The sidebar lists conversations, not turns
+
+Sessions introduce a regression if the history list is left alone: `list_runs` would show a
+rewritten follow-up beside the question it followed up on, as two unrelated research
+questions -- the exact confusion D-121 exists to remove.
+
+`list_session_heads` lists one entry per conversation (`WHERE thread_id = session_id`, which
+works because a first turn is its own session -- there is no nullable "is this a head" flag to
+drift out of step), and opening one renders **every turn** of that session, oldest first.
+
+Ordered by the session's *newest* turn, not the head's `created_at`: following up on an old
+conversation should bring it back to the top, not leave it buried under every question asked
+since it started.
+
+The composer's visibility is decided by the **server**: `_run_view.html` emits
+`data-follow-up` only when the last turn actually has a review. `POST /runs` refuses a
+follow-up to a run with no review (409), and a button whose only outcome is that 409 is worse
+than no button.
+
+`POST /runs` now returns the stored `question` alongside the `thread_id`, and the page shows
+it for a follow-up. **A rewrite the reader cannot see is a rewrite they cannot trust** -- and
+returning it here avoids a second request to find out what their question became.
+
+**Two bugs this turned up, neither of them in the feature:**
+
+- `form { display: flex }` in `app.css` silently beat the UA stylesheet's
+  `[hidden] { display: none }`, so the composer would have shipped permanently visible. The
+  follow-up composer is the first `<form>` on this page to use the `hidden` attribute, which
+  every other pane already relies on. Fixed with an explicit `[hidden] { display: none
+  !important; }` and pinned by a test, because nothing else on the page fails if it is deleted.
+- `RecordingFactory` used one counter for both "models built" and "position in the script", so
+  the first test to run the graph twice had its second run handed the *claim checker's* JSON
+  as a subtopic plan. Split into `models_built` (history, never rewound) and a private
+  position that `restart()` rewinds.
+
 ## Open (proposed, not decided)
 
 **Settled 2026-09-20:** O-1 → D-064, O-2 → D-065, O-3 → D-066.

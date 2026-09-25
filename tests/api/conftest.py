@@ -53,6 +53,10 @@ async def api(
     async with LifespanManager(app):
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            # Attached so a test can replace a lifespan-built dependency -- the follow-up
+            # rewriter, say (D-121). Reaching `client._transport.app` would work and would
+            # couple the tests to httpx internals.
+            client.app = app
             yield client, factory
 
 

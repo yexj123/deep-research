@@ -42,6 +42,11 @@
     <!-- The run happening now. Separate from #loaded-run on purpose: htmx replaces that
          container wholesale, which would drop the elements the streaming code writes into. -->
     <section id="live-run" hidden>
+      <!-- The question actually being researched. For a follow-up this is the *rewritten*
+           one (D-121), which is why it's shown at all: the server resolved "what about it?"
+           into something searchable, and the reader should see what it resolved to. -->
+      <h2 class="question" id="live-question" hidden></h2>
+
       <h2>Progress</h2>
       <ol id="progress"></ol>
 
@@ -53,8 +58,24 @@
       <aside id="coverage" class="coverage" hidden></aside>
     </section>
 
-    <!-- A past run, swapped in by htmx from the sidebar. -->
+    <!-- A past conversation, swapped in by htmx from the sidebar. -->
     <section id="loaded-run"></section>
+
+    <!-- The follow-up composer (D-121). One form for both panes, because a live run and a
+         loaded one are never on screen together -- "the conversation you're looking at" is
+         always unambiguous. #follow-up-to holds the thread being continued. -->
+    <form id="follow-up" hidden>
+      <label for="follow-up-question">Follow up on this conversation</label>
+      <textarea id="follow-up-question" name="question" rows="2" required
+                placeholder="What about quantization?"></textarea>
+      <div class="row">
+        <p class="meta" id="follow-up-note">
+          Asked as a new run. References like &ldquo;it&rdquo; or &ldquo;that&rdquo; are
+          resolved against the answer above before searching.
+        </p>
+        <button type="submit" id="follow-up-submit">Ask</button>
+      </div>
+    </form>
   </main>
 
   <script src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.10/dist/htmx.min.js"

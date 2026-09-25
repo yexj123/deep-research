@@ -60,9 +60,16 @@ Open <http://127.0.0.1:8000>.
 Type a question, pick a model, press **Research**. You'll see the node-by-node progress trail
 and live status from each search, then the review streaming in token by token.
 
-Past runs are listed in the sidebar; click one to reopen it. A run that never started or was
-interrupted offers to start or resume — resuming continues from its last checkpoint rather
-than starting over.
+Past conversations are listed in the sidebar; click one to reopen it, and every turn of it
+comes back. A run that never started or was interrupted offers to start or resume — resuming
+continues from its last checkpoint rather than starting over.
+
+**You can follow up.** A finished review gets a follow-up box, and a question that leans on the
+previous answer is resolved into one that stands on its own before anything is searched —
+*"What about quantization?"* becomes *"How does quantization speed up language model
+inference?"*, and you are shown what it became. Each follow-up is its own run with its own
+clean state; the continuity comes from the local corpus below, not from dragging state
+around. A question that already stands on its own is left exactly as you typed it.
 
 **A first run takes roughly 20 seconds and costs real money.** Most of the wall-clock time
 is arXiv's rate limit (one request every three seconds, which this respects), not the model.

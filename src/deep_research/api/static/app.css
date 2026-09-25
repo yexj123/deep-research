@@ -11,6 +11,12 @@
 
 * { box-sizing: border-box; }
 
+/* The `hidden` attribute is how every pane on this page is shown and hidden, and an author
+   `display:` rule silently beats the UA stylesheet's `[hidden] { display: none }` -- which
+   `form { display: flex }` below does. Without this the follow-up composer would be visible
+   before there is anything to follow up on. */
+[hidden] { display: none !important; }
+
 body {
   margin: 0;
   min-height: 100vh;
@@ -131,8 +137,35 @@ button[type="submit"]:disabled { background: var(--muted); cursor: progress; }
 #review:has(h2), #review:has(p) { white-space: normal; }
 #review h2, .review h2 { color: var(--fg); margin-top: 1.5rem; font-size: 1.05rem; }
 
-.loaded .question { margin: 0 0 .25rem; font-size: 1.2rem; color: var(--fg); }
+.loaded .question, #live-question { margin: 0 0 .25rem; font-size: 1.2rem; color: var(--fg); }
 .loaded .meta { margin: 0 0 1.5rem; }
+
+/* --- a conversation (D-121) ------------------------------------------------------- */
+
+/* Turns after the first are indented and ruled, so a three-turn session reads as one
+   conversation rather than three reviews that happen to be stacked. */
+.turn-follow-up {
+  margin-top: 2.5rem;
+  padding-left: 1rem;
+  border-left: 3px solid var(--line);
+}
+.follow-up-tag {
+  margin: 0 0 .15rem;
+  font-size: .72rem;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+#follow-up {
+  margin-top: 2.5rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--line);
+}
+#follow-up .row { align-items: flex-start; }
+/* The composer's note takes the space the ask form gives its "Model" label. */
+#follow-up-note { margin: 0; flex: 1; }
+#follow-up-submit { flex: none; }
 
 .status {
   padding: .05rem .4rem;

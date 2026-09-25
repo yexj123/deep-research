@@ -13,6 +13,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from deep_research.agent.config import ARXIV_MIN_INTERVAL_SECONDS, ARXIV_TIMEOUT_SECONDS
+from deep_research.agent.followup import make_rewriter
 from deep_research.agent.graph import build_graph
 from deep_research.agent.llm import ModelFactory, get_chat_model
 from deep_research.agent.sources.rate_limit import ArxivRateLimiter
@@ -45,6 +46,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             async with httpx.AsyncClient(timeout=ARXIV_TIMEOUT_SECONDS) as http_client:
                 app.state.conn = conn
                 app.state.corpus = corpus
+                # Built here with the rest, so a test can inject a fake factory the same way
+                # it does for the graph (D-032, D-121).
+                app.state.rewrite_follow_up = make_rewriter(app.state.model_factory)
                 app.state.graph = build_graph(
                     app.state.model_factory,
                     app.state.http_client or http_client,

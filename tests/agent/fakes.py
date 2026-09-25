@@ -98,6 +98,12 @@ class RecordingFactory:
     order the graph builds models -- at milestone 3 that is decompose (JSON) then synthesize
     (prose), which need different text. The last entry repeats if more models are built, so a
     test only has to script the calls it cares about.
+
+    `models_built` counts every model ever built; the script position is tracked separately,
+    so `restart()` can rewind the script without rewriting history. They were one counter
+    until D-121 needed a test that runs the graph twice: the second run picked up the script
+    where the first left off, so its decompose was handed the *claim checker's* JSON and died
+    on SubtopicPlan validation -- a confusing failure a long way from its cause.
     """
 
     def __init__(self, reply: str = DEFAULT_REPLY, replies: Sequence[str] | None = None) -> None:
@@ -106,15 +112,26 @@ class RecordingFactory:
             raise ValueError("RecordingFactory needs at least one reply")
         self.providers: list[ProviderType] = []
         self.models_built = 0
+        self._position = 0
 
     @property
     def reply(self) -> str:
         """The first scripted reply, for tests written before `replies` existed."""
         return self.replies[0]
 
+    def restart(self) -> None:
+        """Rewind to the top of the script, for a test that runs the graph more than once.
+
+        `models_built` and `providers` are deliberately left alone: they record what actually
+        happened, and a test asserting "opening a run executes nothing" still needs the real
+        total across every run.
+        """
+        self._position = 0
+
     def __call__(self, provider: ProviderType) -> BaseChatModel:
         self.providers.append(provider)
-        reply = self.replies[min(self.models_built, len(self.replies) - 1)]
+        reply = self.replies[min(self._position, len(self.replies) - 1)]
+        self._position += 1
         self.models_built += 1
         # A fresh iterator per call. GenericFakeChatModel consumes one item per
         # invoke, and an exhausted iterator would fail the second call.

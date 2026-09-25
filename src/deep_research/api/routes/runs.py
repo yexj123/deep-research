@@ -14,7 +14,7 @@ from deep_research.agent.context import ProviderType
 from deep_research.agent.coverage import summarize_coverage
 from deep_research.agent.runner import RunState, get_review, get_run_state, stream_run
 from deep_research.api.rendering import render_coverage, render_review
-from deep_research.persistence.runs import Run, get_run, list_runs, record_run
+from deep_research.persistence.runs import Run, get_run, list_runs, list_session, record_run
 
 router = APIRouter(prefix="/runs", tags=["runs"])
 
@@ -24,10 +24,17 @@ class CreateRun(BaseModel):
 
     question: str
     provider: ProviderType = "openai"
+    # The run this question follows up on, if any (D-121). A follow-up gets its own
+    # thread and clean graph state; only its wording is inherited.
+    follow_up_to: str | None = None
 
 
 class RunCreated(BaseModel):
     thread_id: str
+    # The question as stored, which for a follow-up is the *rewritten* one (D-121). Returned
+    # so the page can show what it resolved to without a second request -- a rewrite the
+    # reader can't see is a rewrite they can't trust.
+    question: str
 
 
 def _sse(event: str, data: dict[str, Any]) -> str:
@@ -68,16 +75,57 @@ def _event_for(chunk: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
 
 @router.post("", response_model=RunCreated, status_code=201)
 async def create_run(request: Request, body: CreateRun) -> RunCreated:
-    """Record a run and hand back its thread_id. Executes nothing (D-081)."""
+    """Record a run and hand back its thread_id. Executes nothing (D-081).
+
+    With `follow_up_to`, this turn joins that turn's session and its question is rewritten to
+    stand on its own (D-121). The rewrite happens **here**, before the thread exists, so what
+    gets stored and later streamed is the standalone question -- one code path through the
+    graph, and a history entry that reads as a real question rather than "What about it?".
+    """
     question = body.question.strip()
     if not question:
         # intake would reject this too (D-033), but failing here saves a thread_id and a
         # round trip for something we can see immediately.
         raise HTTPException(status_code=422, detail="question must not be empty")
 
+    parent = None
+    if body.follow_up_to:
+        parent = await get_run(request.app.state.conn, body.follow_up_to)
+        if parent is None:
+            raise HTTPException(status_code=404, detail=f"no run {body.follow_up_to}")
+        values = await get_review(request.app.state.graph, parent.thread_id)
+        review = values.get("review", "")
+        if not review:
+            # Following up on a run with no answer yet would rewrite against nothing, and the
+            # rewriter would invent the context it was missing.
+            raise HTTPException(
+                status_code=409, detail="that run has no review to follow up on yet"
+            )
+        question = await request.app.state.rewrite_follow_up(
+            question, parent.question, review, body.provider
+        )
+
     thread_id = str(uuid.uuid4())
-    await record_run(request.app.state.conn, thread_id, question, body.provider)
-    return RunCreated(thread_id=thread_id)
+    await record_run(request.app.state.conn, thread_id, question, body.provider, parent)
+    return RunCreated(thread_id=thread_id, question=question)
+
+
+@router.get("/{thread_id}/session")
+async def read_session(request: Request, thread_id: str) -> list[dict[str, Any]]:
+    """Every turn of the conversation this run belongs to, oldest first (D-121)."""
+    run = await get_run(request.app.state.conn, thread_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail=f"no run {thread_id}")
+    turns = await list_session(request.app.state.conn, run.session_id or run.thread_id)
+    return [
+        {
+            "thread_id": turn.thread_id,
+            "question": turn.question,
+            "created_at": turn.created_at,
+            "is_follow_up": turn.is_follow_up,
+        }
+        for turn in turns
+    ]
 
 
 @router.get("")

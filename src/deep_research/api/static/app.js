@@ -6,12 +6,22 @@
 
 const form = document.getElementById("ask");
 const liveRun = document.getElementById("live-run");
+const liveQuestion = document.getElementById("live-question");
 const loadedRun = document.getElementById("loaded-run");
 const progress = document.getElementById("progress");
 const review = document.getElementById("review");
 const violations = document.getElementById("violations");
 const coverage = document.getElementById("coverage");
 const submit = document.getElementById("submit");
+
+const followUp = document.getElementById("follow-up");
+const followUpQuestion = document.getElementById("follow-up-question");
+const followUpSubmit = document.getElementById("follow-up-submit");
+
+// The thread a follow-up would continue, or null when there's nothing on screen to follow up
+// on. Set from the `done` event (live run) or from the fragment's data-follow-up (a past
+// conversation) -- in both cases by the server having produced a review, never by guessing.
+let followUpTarget = null;
 
 // Node name -> what the reader should be told it means.
 const NODE_LABELS = {
@@ -23,16 +33,26 @@ const NODE_LABELS = {
   check_citations: "Verifying citations",
 };
 
+function setFollowUpTarget(threadId) {
+  followUpTarget = threadId;
+  followUp.hidden = threadId === null;
+  if (threadId === null) followUpQuestion.value = "";
+}
+
 function showLiveRun() {
   progress.replaceChildren();
   review.replaceChildren();
   violations.hidden = true;
   coverage.replaceChildren();
   coverage.hidden = true;
+  liveQuestion.textContent = "";
+  liveQuestion.hidden = true;
   // A live run and a loaded one are never both on screen: two reviews side by side is a
   // good way to misread which one you're looking at.
   loadedRun.replaceChildren();
   liveRun.hidden = false;
+  // Nothing to follow up on until this run produces a review.
+  setFollowUpTarget(null);
 }
 
 function markActive(button) {
@@ -91,6 +111,10 @@ function streamRun(threadId) {
     }
     source.close();
     submit.disabled = false;
+    followUpSubmit.disabled = false;
+    // Only offer a follow-up once there is an answer to follow up on -- POST /runs rejects
+    // the other case with 409 anyway (D-121), and a button that 409s is worse than no button.
+    if (data.review) setFollowUpTarget(data.thread_id);
     document.body.dispatchEvent(new Event("refresh-history"));
   });
 
@@ -101,30 +125,60 @@ function streamRun(threadId) {
     source.close();
     addProgress("Connection lost - reload to resume from where it stopped");
     submit.disabled = false;
+    followUpSubmit.disabled = false;
   });
 }
 
-form.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  submit.disabled = true;
+// Create a run and stream it. `followUpTo` is null for a new question and a thread_id for a
+// follow-up; the server does the rewriting, so this is the only difference between the two
+// (D-121) -- one request shape, one stream, no second code path.
+async function startRun(question, provider, followUpTo) {
   showLiveRun();
   markActive(null);
 
   const response = await fetch("/runs", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      question: document.getElementById("question").value,
-      provider: document.getElementById("provider").value,
-    }),
+    body: JSON.stringify({ question, provider, follow_up_to: followUpTo }),
   });
 
   if (!response.ok) {
     addProgress(`Could not start the run (${response.status})`);
     submit.disabled = false;
+    followUpSubmit.disabled = false;
     return;
   }
-  streamRun((await response.json()).thread_id);
+
+  const created = await response.json();
+  // For a follow-up this is the rewritten question, not what was typed. Showing it is the
+  // whole reason POST /runs returns it: textContent, so it stays a text sink.
+  if (followUpTo) {
+    liveQuestion.textContent = created.question;
+    liveQuestion.hidden = false;
+  }
+  streamRun(created.thread_id);
+}
+
+form.addEventListener("submit", (event) => {
+  event.preventDefault();
+  submit.disabled = true;
+  startRun(
+    document.getElementById("question").value,
+    document.getElementById("provider").value,
+    null,
+  );
+});
+
+followUp.addEventListener("submit", (event) => {
+  event.preventDefault();
+  if (followUpTarget === null) return;
+  const question = followUpQuestion.value;
+  followUpSubmit.disabled = true;
+  // Read the target before showLiveRun() clears it: the follow-up's parent is the run that
+  // was on screen when it was asked, not whatever is on screen once the new one starts.
+  const parent = followUpTarget;
+  followUpQuestion.value = "";
+  startRun(question, document.getElementById("provider").value, parent);
 });
 
 
@@ -133,7 +187,12 @@ form.addEventListener("submit", async (event) => {
 // Opening a past run hides the live pane, so only one review is ever on screen. htmx has
 // already swapped the fragment in by the time this fires.
 document.body.addEventListener("htmx:afterSwap", (event) => {
-  if (event.target.id === "loaded-run") liveRun.hidden = true;
+  if (event.target.id !== "loaded-run") return;
+  liveRun.hidden = true;
+  // The server sets data-follow-up only when the last turn actually has a review (D-121),
+  // so the composer appears for exactly the conversations that can be continued.
+  const session = event.target.querySelector(".session");
+  setFollowUpTarget(session?.dataset.followUp ?? null);
 });
 
 document.body.addEventListener("click", (event) => {
@@ -154,5 +213,7 @@ document.getElementById("new-run").addEventListener("click", () => {
   liveRun.hidden = true;
   loadedRun.replaceChildren();
   markActive(null);
+  // A new question starts a new conversation: nothing on screen to follow up on.
+  setFollowUpTarget(null);
   document.getElementById("question").focus();
 });

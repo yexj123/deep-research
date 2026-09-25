@@ -1,44 +1,61 @@
-{# A past run, rendered server-side and swapped in by htmx (D-080, D-085).
+{# A past conversation, rendered server-side and swapped in by htmx (D-080, D-085, D-121).
+
+   One <article> per turn, oldest first. `data-follow-up` on the wrapper carries the last
+   turn's thread_id when that turn has a review -- app.js reads it to point the follow-up
+   composer at the right thread. It is absent when there is nothing to follow up on, so the
+   composer's visibility is decided by the server, not by the browser guessing.
 
    review_html and coverage_html are already rendered AND escaped by api/rendering.py, so
    they use |safe deliberately -- everything else here is autoescaped as normal. #}
-<article class="loaded">
-  <h2 class="question">{{ run.question }}</h2>
-  <p class="meta">
-    {{ run.provider }} &middot; {{ run.created_at[:16].replace("T", " ") }} &middot;
-    <span class="status status-{{ status }}">{{ status.replace("_", " ") }}</span>
-  </p>
-
-  {% if status == "not_started" %}
-    {# Never executed: POST /runs records a run without running it (D-081). Saying it
-       "didn't finish" would report a failure that never happened. #}
-    <p class="resume">
-      This run hasn't been started yet.
-      <button type="button" data-resume="{{ run.thread_id }}">Start it</button>
+{% set tail = turns|last if turns else none %}
+<div class="session"
+     {% if tail and tail.review_html %}data-follow-up="{{ tail.run.thread_id }}"{% endif %}>
+{% for turn in turns %}
+  <article class="loaded{% if turn.run.is_follow_up %} turn-follow-up{% endif %}">
+    {% if turn.run.is_follow_up %}
+      {# The stored question is the *rewritten* one (D-121): "What about quantization?" was
+         resolved into a standalone question before the run started. Showing it plainly is
+         the point -- a rewrite the reader can't see is a rewrite they can't trust. #}
+      <p class="meta follow-up-tag">Follow-up</p>
+    {% endif %}
+    <h2 class="question">{{ turn.run.question }}</h2>
+    <p class="meta">
+      {{ turn.run.provider }} &middot; {{ turn.run.created_at[:16].replace("T", " ") }} &middot;
+      <span class="status status-{{ turn.status }}">{{ turn.status.replace("_", " ") }}</span>
     </p>
-  {% elif status == "interrupted" %}
-    {# D-081: a checkpoint resumes rather than restarts, so this costs at most the node that
-       was in flight when the run stopped -- not the whole run. #}
-    <p class="resume">
-      This run stopped before finishing.
-      <button type="button" data-resume="{{ run.thread_id }}">Resume it</button>
-    </p>
-  {% endif %}
 
-  {% if review_html %}
-    <div class="review">{{ review_html|safe }}</div>
-  {% else %}
-    <p class="meta">No review yet.</p>
-  {% endif %}
+    {% if turn.status == "not_started" %}
+      {# Never executed: POST /runs records a run without running it (D-081). Saying it
+         "didn't finish" would report a failure that never happened. #}
+      <p class="resume">
+        This run hasn't been started yet.
+        <button type="button" data-resume="{{ turn.run.thread_id }}">Start it</button>
+      </p>
+    {% elif turn.status == "interrupted" %}
+      {# D-081: a checkpoint resumes rather than restarts, so this costs at most the node that
+         was in flight when the run stopped -- not the whole run. #}
+      <p class="resume">
+        This run stopped before finishing.
+        <button type="button" data-resume="{{ turn.run.thread_id }}">Resume it</button>
+      </p>
+    {% endif %}
 
-  {% if citation_violations %}
-    <p class="warn">
-      {{ citation_violations|length }} citation(s) could not be verified against the
-      retrieved papers: {{ citation_violations|join(", ") }}
-    </p>
-  {% endif %}
+    {% if turn.review_html %}
+      <div class="review">{{ turn.review_html|safe }}</div>
+    {% else %}
+      <p class="meta">No review yet.</p>
+    {% endif %}
 
-  {% if coverage_html %}
-    <aside class="coverage">{{ coverage_html|safe }}</aside>
-  {% endif %}
-</article>
+    {% if turn.citation_violations %}
+      <p class="warn">
+        {{ turn.citation_violations|length }} citation(s) could not be verified against the
+        retrieved papers: {{ turn.citation_violations|join(", ") }}
+      </p>
+    {% endif %}
+
+    {% if turn.coverage_html %}
+      <aside class="coverage">{{ turn.coverage_html|safe }}</aside>
+    {% endif %}
+  </article>
+{% endfor %}
+</div>

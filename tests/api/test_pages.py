@@ -9,7 +9,7 @@ again (see tests/agent/test_runner.py).
 import pytest
 
 from tests.agent.fakes import DEFAULT_REPLY
-from tests.api.test_runs import start_run
+from tests.api.test_runs import finished_run, follow_up, start_run
 
 
 @pytest.mark.asyncio
@@ -168,3 +168,146 @@ async def test_opening_an_unknown_run_is_404(api) -> None:
     """A thread_id nobody created has no view, rather than an empty page."""
     client, _ = api
     assert (await client.get("/runs/never-created/view")).status_code == 404
+
+
+# ---- conversations in the UI (D-121) --------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_the_history_lists_conversations_not_turns(api) -> None:
+    """A follow-up does not get its own sidebar entry (D-121).
+
+    This is the regression the feature would otherwise introduce: `list_runs` would show a
+    rewritten follow-up beside the question it followed up on, as though the two were
+    unrelated research questions -- the exact confusion sessions exist to remove.
+    """
+    client, _ = api
+    first = await finished_run(client, "How does speculative decoding work?")
+    await follow_up(client, first, "What about quantization?")
+
+    body = (await client.get("/history")).text
+
+    assert body.count('class="entry"') == 1, "one entry per conversation, not per turn"
+    assert "How does speculative decoding work?" in body
+    assert "What about quantization?" not in body
+    assert "2 turns" in body, "the entry says how far the conversation got"
+
+
+@pytest.mark.asyncio
+async def test_a_one_turn_conversation_is_not_labelled_with_a_turn_count(api) -> None:
+    """"1 turns" is noise on every row of a fresh install (D-121)."""
+    client, _ = api
+    await start_run(client, "a single question")
+
+    body = (await client.get("/history")).text
+    assert "turns" not in body
+
+
+@pytest.mark.asyncio
+async def test_following_up_moves_a_conversation_back_to_the_top(api) -> None:
+    """The sidebar orders by the newest turn, not by when the conversation started (D-121).
+
+    Ordering by the head's `created_at` would bury a conversation you are actively working in
+    underneath every question asked since it began.
+    """
+    client, factory = api
+    old = await finished_run(client, "the older conversation", factory)
+    await finished_run(client, "the newer conversation", factory)
+    await follow_up(client, old, "and what about that?")
+
+    body = (await client.get("/history")).text
+    assert body.index("the older conversation") < body.index("the newer conversation")
+
+
+@pytest.mark.asyncio
+async def test_opening_a_conversation_shows_every_turn_oldest_first(api) -> None:
+    """Opening one entry renders the whole session, in the order it was asked (D-121).
+
+    A conversation that renders only its first turn would hide the answers the follow-ups
+    produced -- and those are the only reason to follow up.
+    """
+    client, factory = api
+    first = await finished_run(client, "the first question", factory)
+    second = await follow_up(client, first, "the follow-up")
+    factory.restart()
+    await client.get(f"/runs/{second}/stream")
+
+    view = (await client.get(f"/runs/{first}/view")).text
+
+    assert view.index("the first question") < view.index("the follow-up (resolved)")
+    assert view.count("<article") == 2
+    assert "Follow-up" in view, "a follow-up turn is marked as one"
+
+
+@pytest.mark.asyncio
+async def test_opening_a_follow_up_shows_the_conversation_it_belongs_to(api) -> None:
+    """Any turn's thread_id opens the whole session, not that turn alone (D-121).
+
+    The sidebar only ever links the first turn, but `/runs/{id}/view` is reachable directly,
+    and a follow-up rendered without the question it answers reads as a non sequitur.
+    """
+    client, _ = api
+    first = await finished_run(client, "the first question")
+    second = await follow_up(client, first, "the follow-up")
+
+    view = (await client.get(f"/runs/{second}/view")).text
+    assert "the first question" in view
+    assert "the follow-up (resolved)" in view
+
+
+@pytest.mark.asyncio
+async def test_the_composer_is_offered_only_when_there_is_a_review_to_follow_up_on(api) -> None:
+    """`data-follow-up` marks a conversation as continuable, and the server decides (D-121).
+
+    POST /runs refuses a follow-up to a run with no review (409). Letting the browser decide
+    when to show the composer would mean a button whose only outcome is that 409.
+    """
+    client, _ = api
+    unstarted = await start_run(client, "never streamed")
+    assert "data-follow-up" not in (await client.get(f"/runs/{unstarted}/view")).text
+
+    done = await finished_run(client, "actually answered")
+    view = (await client.get(f"/runs/{done}/view")).text
+    assert f'data-follow-up="{done}"' in view
+
+
+@pytest.mark.asyncio
+async def test_the_composer_points_at_the_last_turn_not_the_first(api) -> None:
+    """A second follow-up continues from the latest answer (D-121).
+
+    Pointing at the head would rewrite every follow-up against the first review, so turn 3
+    would be blind to what turn 2 found.
+    """
+    client, factory = api
+    first = await finished_run(client, "the first question", factory)
+    second = await follow_up(client, first, "the follow-up")
+    factory.restart()
+    await client.get(f"/runs/{second}/stream")
+
+    view = (await client.get(f"/runs/{first}/view")).text
+    assert f'data-follow-up="{second}"' in view
+
+
+@pytest.mark.asyncio
+async def test_the_page_has_a_follow_up_composer(api) -> None:
+    """The feature is reachable from the UI, and hidden until it applies (D-121)."""
+    client, _ = api
+    page = (await client.get("/")).text
+
+    assert 'id="follow-up"' in page
+    assert 'id="follow-up-question"' in page
+    assert 'id="follow-up"' in page and "hidden" in page
+
+
+@pytest.mark.asyncio
+async def test_the_hidden_attribute_is_not_overridden_by_the_form_rule(api) -> None:
+    """`form { display: flex }` beats the UA stylesheet's `[hidden] { display: none }`.
+
+    Every pane on this page is shown and hidden through the `hidden` attribute, and the
+    follow-up composer is the first `<form>` to use it -- so without an explicit rule it
+    would be visible before there is anything to follow up on. Caught before shipping;
+    asserted here because nothing else on the page would fail if the rule were deleted.
+    """
+    client, _ = api
+    css = (await client.get("/static/app.css")).text
+    assert "[hidden] { display: none !important; }" in css

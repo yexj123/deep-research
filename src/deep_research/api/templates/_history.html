@@ -1,16 +1,20 @@
-{# Sidebar entries. Clicking one swaps that run into the main pane -- no JavaScript, and the
-   review it loads is rendered and escaped server-side (D-080, D-085).
+{# Sidebar entries -- one per *conversation*, not per run (D-121). Clicking one swaps the whole
+   session into the main pane, server-rendered and escaped (D-080, D-085).
 
    Deliberately no per-run status here: that would need a checkpoint read per row (N+1) to
-   show something the run view already states on open. #}
-{% for run in runs %}
+   show something the run view already states on open. The turn count is free -- it comes
+   from the same query as the row. #}
+{% for session in sessions %}
   <li>
     <button type="button" class="entry"
-            hx-get="/runs/{{ run.thread_id }}/view"
+            hx-get="/runs/{{ session.run.thread_id }}/view"
             hx-target="#loaded-run"
             hx-swap="innerHTML">
-      <span class="entry-title">{{ run.question }}</span>
-      <span class="meta">{{ run.created_at[:16].replace("T", " ") }}</span>
+      <span class="entry-title">{{ session.run.question }}</span>
+      <span class="meta">
+        {{ session.last_at[:16].replace("T", " ") }}
+        {%- if session.turns > 1 %} &middot; {{ session.turns }} turns{% endif %}
+      </span>
     </button>
   </li>
 {% else %}

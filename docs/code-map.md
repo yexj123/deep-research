@@ -294,6 +294,19 @@ Deliberately narrow: it does **not** extract JSON from the middle of prose. A mo
 wraps its object in commentary is not following the prompt, and digging it out would turn a
 loud failure into an invisible one.
 
+### `agent/followup.py` [D-121]
+**Defines:** `NEEDS_CONTEXT`, `CONTEXT_CHARS`, `SYSTEM_PROMPT`, the `Rewriter` type,
+`needs_context`, and `make_rewriter` (a closure over the model factory, D-032).
+**Uses:** `context.ProviderType`, `llm.ModelFactory`, `replies.strip_code_fence`.
+**Used by:** `api/main.py` (builds it in the lifespan, so a test can inject a fake the same
+way it does for the graph) and `api/routes/runs.py` via `app.state.rewrite_follow_up`.
+
+**Not a node, and not in the graph.** A follow-up is resolved at run *creation*, so the graph
+sees an ordinary standalone question and needs no second code path (D-121).
+**Deterministic first, model second:** a question that already stands alone never reaches a
+model. **Never raises, never returns empty** — every failure path returns the original
+question, the same additive-feature rule as D-113.
+
 ### `agent/nodes/check_claims.py` [D-113]
 **Defines:** `make_check_claims` (a closure over the model factory, D-032), `extract_claims`,
 `system_prompt`, and the `Judgement` / `ClaimReport` validation models.
@@ -405,9 +418,15 @@ limiter's semaphore binds to the first event loop that touches it.
 `httpx.MockTransport` client and a zero-delay limiter without monkeypatching. Run it with
 `uvicorn deep_research.api.main:create_app --factory`.
 
-### `api/routes/runs.py` [M5]
+### `api/routes/runs.py` [M5 → D-121]
 **Defines:** `CreateRun` / `RunCreated` (Pydantic at the boundary, D-013), `_sse`, `_event_for`,
-and the four routes: `POST /runs`, `GET /runs`, `GET /runs/{id}`, `GET /runs/{id}/stream`.
+and five routes: `POST /runs`, `GET /runs`, `GET /runs/{id}`, `GET /runs/{id}/stream`,
+`GET /runs/{id}/session`.
+**`POST /runs` is where a follow-up is resolved** (D-121): with `follow_up_to`, it looks up the
+parent (404 if unknown), reads its review (409 if there isn't one yet), and rewrites the
+question through `app.state.rewrite_follow_up` **before** the thread exists — so the graph sees
+one kind of question and history stores a real one. It returns the stored `question` alongside
+the `thread_id`, which is what lets the page show the reader what their question became.
 **`_event_for` is deliberately not a passthrough:** raw `updates` chunks carry `Source` objects,
 which are not JSON-serializable, and the browser has no use for full state. It emits `node`,
 `progress`, `token` and `done` events instead — and filters `messages` to `synthesize`, or the
@@ -417,11 +436,53 @@ data: <json>
 
 ` in a `StreamingResponse`.
 
-### `persistence/runs.py` [M5]
-**Defines:** `Run`, `init_runs_table`, `record_run`, `get_run`, `list_runs`.
+### `api/routes/pages.py` [D-080 → D-121]
+**Defines:** `TEMPLATES_DIR`, `templates`, and three routes: `GET /` (the page),
+`GET /history` (the sidebar fragment), `GET /runs/{id}/view` (a conversation fragment), plus
+the `_render_turn` helper.
+**Uses:** `coverage.summarize_coverage`, `runner.get_review` / `get_run_state`,
+`rendering.render_review` / `render_coverage`, `persistence.runs`.
+**Serves HTML fragments, not JSON** (D-080, D-085): markdown is rendered *and* escaped in
+Python, so the browser never parses model-authored text and there is no second rendering path
+to keep correct. This is the one place htmx genuinely earns its keep.
+**`/history` lists conversations, `/runs/{id}/view` renders all of one** (D-122). The view
+costs one checkpoint read per turn — which is exactly why the history list still refuses to do
+the same per row: that would be N+1 over *every* run rather than over one session.
+
+### `api/templates/` and `api/static/` [D-080 → D-121]
+No build step, no `node_modules` (D-080). htmx comes from a CDN with an integrity hash;
+everything else is served from this app.
+
+| file | holds |
+|---|---|
+| `index.html` | the shell: the ask form, `#live-run`, `#loaded-run`, and the follow-up composer (D-121) |
+| `_history.html` | one sidebar entry per conversation, with a turn count (D-122) |
+| `_run_view.html` | every turn of one conversation; emits `data-follow-up` when the last turn has a review |
+| `app.js` | creating a run, the `EventSource` token stream, and which thread the composer targets |
+| `app.css` | including `[hidden] { display: none !important; }`, which `form { display: flex }` would otherwise beat (D-122) |
+
+**Where the follow-up target comes from is the point:** the server sets `data-follow-up` only
+when there is a review to follow up on, so the composer appears for exactly the conversations
+`POST /runs` will accept. The browser never decides.
+
+### `persistence/runs.py` [M5 → D-121]
+**Defines:** `Run`, `SessionHead`, `init_runs_table`, `record_run`, `get_run`, `list_runs`,
+`list_session`, `list_session_heads`.
 **Why:** a checkpoint holds a run's *state*, but nothing records a run before it has executed a
 node — and `POST /runs` returns a thread_id without running anything (D-081). Same SQLite file as
 the checkpoints (D-007).
+**Conversations live here, not in graph state** (D-121): `parent_thread_id` is what a turn was
+asked about, `session_id` groups the conversation, and a first turn is its own session
+(`session_id == thread_id`) so nothing needs a nullable "is this a head" flag.
+`Run.is_follow_up` is a property over `parent_thread_id`, never a stored column — a stored
+boolean could disagree with the column, a property cannot.
+**`init_runs_table` migrates in place**: `CREATE TABLE IF NOT EXISTS` does nothing to a table
+that already exists, so it checks `PRAGMA table_info` and `ALTER`s in the two columns, then
+backfills `session_id = thread_id` for rows that predate sessions. Same lesson as D-103, one
+table over; covered by `tests/api/test_runs_table.py`, which is the only thing that can build
+a pre-D-121 database.
+**`list_session_heads` is what the sidebar reads** (D-122), ordered by each session's newest
+turn so an active conversation stays at the top. `list_runs` still returns every turn.
 
 ### `agent/graph.py` [M1 → M4]
 **Defines:** `build_graph(model_factory, http_client, limiter, checkpointer)` (D-032, D-049, D-064),
@@ -508,7 +569,9 @@ Claude writes and maintains every file here (since 2026-09-19; see `CLAUDE.md`).
 | `agent/test_runner.py` [M5] | start / resume / replay as a unit. Here rather than in `api/` because ASGITransport drives the response generator to completion, so an HTTP-level disconnect test would pass without exercising anything (D-084) | `stream_run`, `get_run_state` |
 | `agent/test_coverage.py` [M5] | The coverage summary: what was lost, attempt counts normalized like the retry cap, and that every run reports why it stopped (O-5, D-086) | `summarize_coverage` |
 | `api/test_rendering.py` [M5] | Model-authored markdown must not become live HTML: raw HTML escaped, dangerous link schemes not linkified, real formatting still works (D-085) | `render_review` |
-| `api/test_pages.py` [M5] | The page and its assets are served, and the history fragment escapes the question (D-080, D-085) | `create_app` |
+| `api/test_pages.py` [M5, D-121] | The page and its assets are served, the history fragment escapes the question (D-080, D-085), and conversations render as conversations: one sidebar entry per session, every turn on open, a composer the **server** decides to offer, and the `[hidden]` rule that `form { display: flex }` would otherwise beat | `create_app` |
+| `api/test_runs_table.py` [D-121] | The runs table directly, for the one thing no route can reach: a database written *before* sessions existed. Migration in place, migrating twice, `session_id` inherited from the parent rather than the predecessor, and heads ordered by their newest turn (D-103's lesson, one table over) | `persistence/runs` |
+| `agent/test_followup.py` [D-121] | Rewriting a follow-up into a standalone question: which questions are left untouched (and so never reach a model), and that every failure path — model error, empty reply, runaway reply — returns the original question rather than costing the user their question | `needs_context`, `make_rewriter` |
 | `agent/test_gap_check.py` [M4] | The stopping rule as a pure function: depth accounting, and the two exits (D-075, D-076) | `gap_check`, `route_after_gap_check` |
 | `agent/test_papers_fence.py` [D-097] | The `<papers>` block cannot be closed by its own contents: hostile titles and abstracts, the fence being unguessable and per-run, the prompt naming the same token, and the *unfenced* form staying byte-identical for the eval recorder | `format_papers`, `new_fence`, `system_prompt` |
 | `agent/test_worker_indexing.py` [D-101] | The worker seeds the corpus, idempotently across subtopics; `corpus=None` behaves exactly as before; a broken corpus does **not** fail the subtopic but **is** reported on the progress stream; and a TypeError in indexing still crashes | `make_research_worker`, `persistence/corpus` |

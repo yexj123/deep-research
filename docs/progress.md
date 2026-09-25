@@ -3,7 +3,8 @@
 What's done, what's next, and whose job each item is. Design reasoning
 lives in [`decisions.md`](decisions.md); this file only tracks status.
 
-**Last updated:** 2026-09-21 · **Current milestone:** 5 done; evaluation (O-11 → O-14) in flight
+**Last updated:** 2026-09-25 · **Current milestone:** 6 done (corpus, adaptive exits, claim
+checker); multi-turn sessions shipped (D-121, D-122); next is Semantic Scholar, then O-16
 
 **Who writes what:** you write the implementation (`src/`); Claude writes every test
 (since 2026-09-19) and keeps the docs (since 2026-09-20) — `docs/*.md` and the README.
@@ -14,10 +15,21 @@ Backed by `CLAUDE.md`, the output style, and `Edit(/tests/**)`, `Edit(/docs/**)`
 
 ## Do next (you)
 
-- [ ] **D-070: the planner repair-retry is still open** (D-119). D-089 measured 1 run in 10
-      dying on an unparseable plan; the fence fix does *not* explain it (0 of 120 calls), so
-      the cause is unknown. Before building a retry, re-measure the failure rate -- 120 clean
-      calls suggest the original number may not reproduce
+- [ ] **A "claim" can span four paragraphs.** `SENTENCE_SPLIT` (`check_claims.py:62`) only
+      breaks on `[.!?]` followed by whitespace and an **uppercase letter** — but reviews are
+      markdown, where the next block starts with `4.`, `##` or `**`. Seen live: one flagged
+      claim ran from a bullet through a heading into a numbered list, six citations in one
+      blob. Two costs: the checker judges an unsplittable mixture, so "unsupported" says
+      nothing about *which* part; and fewer sentences qualify as claims at all
+- [ ] **Semantic Scholar as a second source** — the `sources/` package was designed for it
+      and has only ever had one implementation, so the abstraction is untested
+- [ ] **D-070: the planner repair-retry is still open** (D-120). Re-measured on the *second-round*
+      prompt (the one carrying the explored list, which D-119 missed): **1 fenced reply in 120**.
+      So D-117's fix does prevent a real failure — but pooled 1/240 = 0.42% still excludes
+      D-089's implied ~3%, and most runs now make only one planner call at all (D-096). The
+      1-in-10 remains unexplained
+- [ ] **O-16: a covered topic never refreshes.** Needs *time to pass*, not compute — re-record
+      a covered question against a corpus seeded weeks earlier. Report-only until then (D-105)
 - [ ] *(Optional)* Delete the old 55 MB uv cache on C::
       `uv cache clean --cache-dir "$env:LOCALAPPDATA\uv\cache"`
 - [x] Fixed the four truncated comments in `state.py`
@@ -97,6 +109,36 @@ died on an unparseable plan"*.
 **D-116 measured what a silent bug had cost**: the duplicate-heading collision was discarding
 **one section in ten** (28.9 → 31.7 chunks per paper). D-115 had said that was unmeasurable;
 it was not, because the corpus is regenerable.
+
+## Multi-turn sessions shipped (D-121, D-122) — 2026-09-25
+
+The app looked like a chat and behaved like a one-shot form. Now a finished conversation has a
+follow-up composer, and "What about quantization?" becomes a real research question.
+
+**The measurement changed the design before any of it was built.** The plan was to carry
+`sources`, `seen_paper_ids` and `explored_subtopics` into the follow-up's state. Run against
+the 60-paper corpus two earlier runs had already built, **4 of 5 follow-up-shaped subtopics
+were already covered locally** — and carrying `explored_subtopics` would have made the planner
+*refuse* to revisit the topic being asked about. So a follow-up is a fresh thread with clean
+state that inherits only **language**, and the corpus supplies the continuity.
+
+Verified live, not just in tests: "What about quantization instead?" → "How does quantization
+speed up language model inference?", streamed to completion **in 10 seconds entirely from the
+local corpus**, and its review cross-referenced the first turn's topic on its own.
+
+Shipped: `agent/followup.py`; `parent_thread_id` / `session_id` / `list_session` /
+`list_session_heads` on the runs table, with an in-place migration; `follow_up_to` on
+`POST /runs` (404 unknown parent, 409 no review yet) and `GET /runs/{id}/session`; a sidebar
+that lists conversations rather than turns; a run view that renders every turn; the composer.
+
+**Two bugs found on the way, neither in the feature itself** — `form { display: flex }`
+silently beat `[hidden] { display: none }`, so the composer would have shipped permanently
+visible; and `RecordingFactory` conflated "models built" with "position in the script", so the
+first test to run the graph twice got the claim checker's JSON handed to `decompose`.
+
+**And one bug found by looking at a real coverage panel:** `SENTENCE_SPLIT` in
+`check_claims.py` only breaks before an uppercase *letter*, but reviews are markdown — see the
+"Do next" item below.
 
 ## /demo-check, 2026-09-25 — passed, after fixing what it found
 

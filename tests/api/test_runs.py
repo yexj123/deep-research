@@ -32,6 +32,44 @@ async def start_run(client: httpx.AsyncClient, question: str = "What is attentio
     return response.json()["thread_id"]
 
 
+async def finished_run(
+    client: httpx.AsyncClient,
+    question: str = "What is attention?",
+    factory: RecordingFactory | None = None,
+) -> str:
+    """A run that has actually produced a review -- the precondition for following up.
+
+    Pass `factory` when the test runs the graph more than once: the scripted replies are one
+    run long, and the second run would otherwise be handed the tail of the first one's script.
+    """
+    thread_id = await start_run(client, question)
+    if factory is not None:
+        factory.restart()
+    await client.get(f"/runs/{thread_id}/stream")
+    return thread_id
+
+
+async def follow_up(
+    client: httpx.AsyncClient, parent: str, question: str = "What about it?"
+) -> str:
+    """Ask `question` as a follow-up to `parent` (D-121).
+
+    Stubs the rewriter: the shared fake model replies from a fixed script, so left to itself
+    it would hand the rewriter whatever reply came next and the test would pass or fail for a
+    reason that has nothing to do with sessions.
+    """
+
+    async def fake_rewrite(q: str, parent_question: str, review: str, provider: str) -> str:
+        return f"{q} (resolved)"
+
+    client.app.state.rewrite_follow_up = fake_rewrite
+    response = await client.post(
+        "/runs", json={"question": question, "follow_up_to": parent}
+    )
+    assert response.status_code == 201, response.text
+    return response.json()["thread_id"]
+
+
 # ---- creating a run ------------------------------------------------------------------
 
 
@@ -305,3 +343,135 @@ async def test_the_stream_carries_live_progress_from_the_workers(api) -> None:
 
     assert any("Searching arXiv" in m for m in messages)
     assert any("Found 3 paper(s)" in m for m in messages)
+
+
+# ---- follow-up questions (D-121) ------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_follow_up_joins_its_parents_session(api) -> None:
+    """A follow-up is its own thread with its own clean state, tied only by session_id.
+
+    Carrying graph state forward was the original plan and is not what shipped: the corpus
+    already supplies research continuity across every thread, filtered per subtopic, and
+    carrying `explored_subtopics` would stop the planner revisiting the very topic the
+    follow-up asks about.
+    """
+    import json
+
+    client, _ = api
+    first = await start_run(client)
+    await client.get(f"/runs/{first}/stream")  # produce a review to follow up on
+
+    created = await client.post(
+        "/runs", json={"question": "What about it?", "provider": "openai", "follow_up_to": first}
+    )
+    assert created.status_code == 201
+    second = created.json()["thread_id"]
+    assert second != first, "a follow-up gets its own thread, never the parent's"
+
+    session = (await client.get(f"/runs/{second}/session")).json()
+    assert [t["thread_id"] for t in session] == [first, second], "oldest first"
+    assert [t["is_follow_up"] for t in session] == [False, True]
+
+
+@pytest.mark.asyncio
+async def test_a_follow_up_is_stored_as_the_rewritten_question(api) -> None:
+    """What gets stored is the rewriter's output, not "What about it?" (D-121).
+
+    Rewriting at creation keeps one code path through the graph, and makes the history entry
+    read as a real question rather than a fragment nobody can interpret later.
+
+    The rewriter is stubbed rather than driven through the shared fake factory. With the
+    factory, this test passed by storing leftover claim-checker JSON as the question -- green
+    for a reason that had nothing to do with the behaviour being claimed. The rewriter's own
+    contract is covered in `tests/agent/test_followup.py`; what matters here is that the route
+    calls it and stores what it returns.
+    """
+    client, _ = api
+    first = await start_run(client)
+    await client.get(f"/runs/{first}/stream")
+
+    seen: list[tuple[str, str]] = []
+
+    async def fake_rewrite(question, parent_question, parent_review, provider):
+        seen.append((question, parent_question))
+        return "How does quantization compare to speculative decoding?"
+
+    client.app.state.rewrite_follow_up = fake_rewrite
+
+    second = (
+        await client.post(
+            "/runs",
+            json={"question": "What about it?", "provider": "openai", "follow_up_to": first},
+        )
+    ).json()["thread_id"]
+
+    assert seen and seen[0][0] == "What about it?", "the rewriter must see the raw follow-up"
+    stored = (await client.get(f"/runs/{second}")).json()["question"]
+    assert stored == "How does quantization compare to speculative decoding?"
+
+
+@pytest.mark.asyncio
+async def test_creating_a_run_returns_the_question_it_stored(api) -> None:
+    """POST /runs hands back the question, which for a follow-up is the rewritten one (D-121).
+
+    The page shows this. A rewrite the reader can't see is a rewrite they can't trust -- and
+    returning it here is what lets the page show it without a second request.
+    """
+    client, factory = api
+    first = await finished_run(client, factory=factory)
+
+    plain = await client.post("/runs", json={"question": "  What is attention?  "})
+    assert plain.json()["question"] == "What is attention?", "stored stripped, returned stripped"
+
+    async def fake_rewrite(q: str, parent_question: str, review: str, provider: str) -> str:
+        return "How does quantization speed up inference?"
+
+    client.app.state.rewrite_follow_up = fake_rewrite
+    created = (
+        await client.post(
+            "/runs", json={"question": "What about quantization?", "follow_up_to": first}
+        )
+    ).json()
+
+    assert created["question"] == "How does quantization speed up inference?"
+    stored = (await client.get(f"/runs/{created['thread_id']}")).json()
+    assert stored["question"] == created["question"], "returned == stored"
+
+
+@pytest.mark.asyncio
+async def test_a_follow_up_to_an_unfinished_run_is_refused(api) -> None:
+    """Rewriting against a review that does not exist invents the missing context.
+
+    409 rather than 404: the run is real, it just has nothing to follow up on yet.
+    """
+    client, _ = api
+    first = await start_run(client)  # created, never streamed
+
+    response = await client.post(
+        "/runs", json={"question": "What about it?", "provider": "openai", "follow_up_to": first}
+    )
+    assert response.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_a_follow_up_to_a_missing_run_is_a_404(api) -> None:
+    """The control for the test above: an unknown parent is a different failure."""
+    client, _ = api
+    response = await client.post(
+        "/runs",
+        json={"question": "What about it?", "provider": "openai", "follow_up_to": "nope"},
+    )
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_a_first_question_is_its_own_session(api) -> None:
+    """session_id is never empty, so the UI needs no special case for a first question."""
+    client, _ = api
+    first = await start_run(client)
+
+    session = (await client.get(f"/runs/{first}/session")).json()
+    assert [t["thread_id"] for t in session] == [first]
+    assert session[0]["is_follow_up"] is False
