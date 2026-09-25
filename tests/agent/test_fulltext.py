@@ -301,3 +301,19 @@ def test_real_unicode_is_not_collateral_damage() -> None:
     from deep_research.agent.sources.fulltext import _drop_surrogates
 
     assert _drop_surrogates("naïve café 東京 Müller") == "naïve café 東京 Müller"
+
+
+def test_a_truncated_extraction_is_a_known_limitation() -> None:
+    """pypdf can stop extracting partway and only *warn* (D-116).
+
+    "Exceeded 5000 form XObject invocations while extracting text; further form content is
+    skipped" appeared on 3 of 362 papers. It is a log line, not an exception, so extract_text
+    returns a truncated string that looks complete and the paper is indexed as fully read.
+
+    This test does not assert a fix -- there is none, and raising the limit trades memory
+    against completeness on exactly the figure-heavy papers already near the size cap. It
+    pins the *contract*: extraction returns whatever text it got, and callers must not treat
+    a non-empty result as proof of a complete read.
+    """
+    text = extract_text(make_pdf("A short paper"))
+    assert text, "a non-empty result means SOME text, never necessarily ALL of it"

@@ -2510,6 +2510,57 @@ enrichment would settle it at the cost of ~18 minutes.
 of the six were suspected from reading the code and confirmed by a red test; the other three
 surfaced while writing tests for the first three.
 
+### D-116 - The duplicate-heading bug cost ~10% of every paper, and pypdf truncates silently
+
+**D-115 said the loss could not be measured retroactively. It can, by re-fetching.** The
+dropped chunks were never written, so no query finds them -- but the corpus is regenerable, so
+clearing the full-text tier and re-enriching with the fix gives a direct before/after. That is
+what `enrich --force` exists for: `papers_without_full_text` correctly skips papers already
+read, which makes a change to *how* chunks are built invisible until the old ones are cleared.
+
+| | before (buggy) | after (fixed) |
+|---|---|---|
+| full-text chunks | 10,551 | **11,391** |
+| papers read | 365 | 359 |
+| **chunks per paper** | **28.9** | **31.7** |
+
+**+9.8% per paper.** Roughly one section in ten was being discarded by
+`INSERT OR IGNORE` on a colliding heading, with the insert reporting success and the
+enrichment log printing a chunk count that looked entirely normal.
+
+Per-paper is the honest statistic here: the two runs read slightly different paper sets,
+because the earlier pilot used an unscoped work list and its extras are not in the scoped 362.
+Comparing raw totals would credit the fix with papers that simply were not in both runs.
+
+**Cost of the measurement:** 18 minutes and ~1 GB of re-downloading, for a number that turns
+"some data was lost" into "one section in ten". Worth it -- the first version of that sentence
+is unfalsifiable, and this project's whole argument is that unfalsifiable claims are the
+problem.
+
+---
+
+**A second silent truncation, found in the same run.** pypdf logged, to stderr, on three
+papers:
+
+> `Exceeded 5000 form XObject invocations while extracting text; further form content is
+> skipped.`
+
+**That is extraction giving up partway through a paper and telling nobody who would act on
+it.** It is a warning, not an exception, so `extract_text` returns a truncated string that
+looks like a complete one, and the paper is indexed as fully read.
+
+Not fixed, and deliberately: raising the limit trades memory against completeness on exactly
+the figure-heavy papers already near the 30 MB cap, and the right threshold is unmeasured.
+**Recorded as a known limitation of the full-text tier**, which matters less than it would
+have: D-111 measured full text as not worth its cost, so `EXCERPT_MAX_CHARS = 0` and no
+shipped run reads these chunks. If that default is ever reversed, this becomes a real defect
+and the count of affected papers needs measuring first.
+
+**The pattern, now three deep in one feature:** `INSERT OR IGNORE` dropping a section,
+pypdf skipping form content, and D-109's surrogate killing a whole pass -- each reports
+success, or near enough, for less work than was done. Storage, parsing and iteration each
+found their own way to do it.
+
 ## Open (proposed, not decided)
 
 **Settled 2026-09-20:** O-1 → D-064, O-2 → D-065, O-3 → D-066.
