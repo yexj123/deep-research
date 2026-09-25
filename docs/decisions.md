@@ -2323,6 +2323,40 @@ measured and did not improve review quality. The fourth, the local corpus, did p
 rather than quality. A system whose own evaluation overturns three of its four premises is a
 more defensible artifact than one that never asked.
 
+### D-112 - Ungrounded citations are too rare to have a depth rate (closes D-079's open item)
+
+D-079 recorded one observation in each direction and asked for a rate. **140 runs later the
+rate exists, and it is 0.18 per 100 citations** - 2 ungrounded citations in 1103, across
+every arm ever recorded. The measurement cost nothing: `citation_violations` is a
+deterministic field already in every committed recording (D-046, D-086).
+
+| rounds actually run | runs | citations | ungrounded | per 100 |
+|---|---|---|---|---|
+| 1 | 99 | 776 | 1 | 0.1 |
+| 2 | 11 | 98 | 0 | 0.0 |
+| 3 | 30 | 229 | 1 | 0.4 |
+
+**The depth question is unanswerable, and that is the answer.** Two events cannot support a
+rate comparison: the apparent 4x between one round and three is one citation against one
+citation. Reporting "0.4 vs 0.1 per 100" as a depth effect would be exactly the thin-data
+inference D-079 itself warned about.
+
+**What the number does settle** is more useful than what it does not:
+
+- **Ungrounded citations are rare enough not to be the risk worth designing against.** Two in
+  1103 is 0.18%. The project's earlier framing treated hallucinated IDs as a central hazard;
+  measured, they are a footnote.
+- **The two that did occur were both caught**, which is the property that matters. D-046
+  verifies the *ID*, not the claim, so the guarantee is narrow and exact: no review cites a
+  paper the run did not retrieve. That guarantee held 1103 times.
+- **The remaining risk is claim support, not ID validity** - "Smith showed X [arXiv:1234]"
+  where the ID is real, the paper was retrieved, and the paper never says X. That is O-12's
+  territory, and this measurement is the argument for it being the *next* thing rather than
+  more citation-ID work.
+
+**Not re-run per arm as a quality gate.** D-078 settled that asserting `citation_violations
+== []` asserts the *model* behaved; this is recorded, not enforced.
+
 ## Open (proposed, not decided)
 
 **Settled 2026-09-20:** O-1 → D-064, O-2 → D-065, O-3 → D-066.

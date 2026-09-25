@@ -43,8 +43,31 @@ Backed by `CLAUDE.md`, the output style, and `Edit(/tests/**)`, `Edit(/docs/**)`
       7 citations each with `citation_violations == []`, server log clean. **D-096 confirmed
       live: both runs stopped after one round**, which no unit test could show. Two cosmetic
       findings below
-- [ ] **`notebooks/`: measure ungrounded citations against depth** (D-079, Open) — the three
-      depth arms now exist, so this is a re-score of recorded data rather than new runs
+- [x] **Measured ungrounded citations against depth** (D-112) — free, from the 140 committed
+      recordings: **2 in 1103 citations = 0.18 per 100**, and two events cannot support a
+      depth rate. Closes D-079's open item; the live risk is claim *support*, not ID validity
+
+## Milestone 6 (O-13) settled — the corpus pays, full text does not
+
+**Done, and written up in [`findings.md`](findings.md).**
+
+| | result |
+|---|---|
+| Local corpus (D-107) | **65 arXiv requests → 1, −65% wall clock**, quality flat. **On by default** |
+| Full text (D-111) | 2.8× the prompt, nothing past 2 SE, faithfulness nominally down. **Off by default** |
+| Retrieval/synthesis mismatch (D-110) | faithfulness **−3.1 SE** — the only harmful result in the whole evaluation. Now unreachable in code |
+
+**The sequence that produced it:** corpus store (D-100) → worker seeds it (D-101) → measure the
+sufficiency threshold rather than guess it (D-104, D-106) → local-first retrieval (D-105) →
+measure it (D-107) → full-text tier (D-108, D-109) → measure it (D-111).
+
+**Two rules specified in advance turned out unbuildable**, both caught by measuring before
+building: the novelty-based semantic exit (D-094) and O-13's own paper-count sufficiency test,
+which returns k for every query in every corpus (D-104). A third — augment-rather-than-replace
+— was overturned by the data (D-105).
+
+**What is left of O-13:** nothing required. O-16 (a covered topic never refreshes) needs time
+to pass rather than compute, and O-12 is the next piece of work.
 
 ## Milestone 6 (O-13) started: the corpus store (D-100)
 

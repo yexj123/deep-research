@@ -333,15 +333,34 @@ imports still point downward (rule 1).
 `ABSTRACT` / `FULL_TEXT` tier constants.
 **Uses:** `sources/models.Source`, `sqlite3`. No new dependency — FTS5 is in the bundled
 SQLite (3.49.1).
-**Used by:** `nodes/research_worker.py` (indexes each search's results, D-101) and
-`api/main.py`'s lifespan, which opens it on the same file as the checkpoints (D-007). Nothing
-*reads* it yet -- local-first retrieval is the next increment.
+**Also defines** (added after the first increment): `index_full_text` and
+`papers_without_full_text` for the full-text tier (D-108), `strongly_matching_papers` -- the
+sufficiency test that counts *term coverage* rather than papers, because the plain top-k count
+returns k for every query in every corpus (D-104, D-106) -- and `matching_excerpts`, which
+picks the passages the model actually reads (D-110).
+**Used by:** `nodes/research_worker.py` (indexes each search's results and answers covered
+subtopics locally, D-101, D-105), `api/main.py`'s lifespan, which opens it on the same file as
+the checkpoints (D-007), and `tests/eval/enrich.py`.
 
 **Two things to know before editing it.** `bm25()` returns the *negative* of the standard
 score, so `ORDER BY bm25(t)` ascending is best-first and `DESC` silently returns the worst
 matches; `search` converts at the boundary so nothing above it sees a negative. And `section`
 is `NOT NULL DEFAULT ''` because SQLite allows unlimited NULLs in a unique index — nullable
 would let the same abstract be indexed twice and inflate its own BM25 term frequencies.
+
+### `agent/sources/fulltext.py` [D-108]
+**Defines:** `fetch_pdf`, `extract_text`, `split_sections`, `chunk_paper`, `Chunk`,
+`FullTextError`, and the `MAX_CHUNK_CHARS` / `SKIP_SECTIONS` / `HEADING_STYLES` constants.
+**Uses:** `httpx`, `pypdf`. **Used by:** `tests/eval/enrich.py` only -- the agent never fetches
+full text during a run (D-111 measured it as not worth the 2.8x prompt).
+
+**pypdf, not PyMuPDF, is a licence decision.** PyMuPDF extracts better and is AGPL-3.0;
+anyone deploying this MIT app over a network would have to release their source. pypdf is
+BSD-3-Clause and adequate because arXiv PDFs are LaTeX-generated with a real text layer.
+
+**`extract_text` strips lone surrogates**, and that is not cosmetic: pypdf renders some glyphs
+as unpaired surrogates which SQLite cannot encode, and one such character killed a 360-paper
+enrichment pass at paper 126 (D-109).
 
 ### `agent/runner.py` [M5]
 **Defines:** `RunState` (NOT_STARTED / INTERRUPTED / FINISHED), `get_run_state`, `stream_run`,
@@ -471,6 +490,8 @@ Claude writes and maintains every file here (since 2026-09-19; see `CLAUDE.md`).
 | `agent/test_gap_check.py` [M4] | The stopping rule as a pure function: depth accounting, and the two exits (D-075, D-076) | `gap_check`, `route_after_gap_check` |
 | `agent/test_papers_fence.py` [D-097] | The `<papers>` block cannot be closed by its own contents: hostile titles and abstracts, the fence being unguessable and per-run, the prompt naming the same token, and the *unfenced* form staying byte-identical for the eval recorder | `format_papers`, `new_fence`, `system_prompt` |
 | `agent/test_worker_indexing.py` [D-101] | The worker seeds the corpus, idempotently across subtopics; `corpus=None` behaves exactly as before; a broken corpus does **not** fail the subtopic but **is** reported on the progress stream; and a TypeError in indexing still crashes | `make_research_worker`, `persistence/corpus` |
+| `agent/test_fulltext.py` [D-108] | Fetching, extraction and chunking: both heading conventions, references dropped, the chunk size bound, no overlap, and surrogate stripping that does not damage real non-ASCII. Uses a 563-byte PDF built in the test -- **no arXiv PDF is committed, which is a licence decision** (D-008) | `sources/fulltext`, `fixtures/fulltext/*.txt` |
+| `agent/test_local_first.py` [D-105, D-111] | A covered subtopic skips arXiv; a thin or uncovered one does not; the switch works both ways; a broken corpus falls back; and **retrieval is restricted to abstracts when synthesis will not read full text**, making D-110's harmful pairing unreachable | `make_research_worker`, `persistence/corpus` |
 | `agent/test_corpus.py` [D-100] | Indexing, BM25 retrieval and the traps: ascending-is-best-first, relevance never negative, idempotent re-indexing, sufficiency counting distinct papers rather than chunks, the tier filter, and six hostile subtopics that cannot break the query — with a control proving the raw form would have raised | `persistence/corpus`, `build_fts_query` |
 | `agent/test_exits.py` [D-096] | That routing and reporting can never disagree: each of the four exits fires on a state built for it, the router stops whenever any fires, and the coverage panel names the one that actually did. Exists because that invariant broke twice (D-094, D-096) | `exit_reason`, `describe`, `summarize_coverage`, `route_after_gap_check` |
 | `agent/test_adaptive_exit.py` [D-096] | The two measured exits: stop when the prompt is already full (`SYNTHESIS_TOP_N` reached) and when most of a round's searches came back empty. Includes the boundary in the direction that costs quality, the per-round baseline that stops cumulative empties latching the exit on, and the thin-question case that must still get its second round | `route_after_gap_check`, `make_source` |
@@ -480,6 +501,8 @@ Claude writes and maintains every file here (since 2026-09-19; see `CLAUDE.md`).
 | `eval/recording.py` [O-11] | The recording format: `Recording`, `arm_name(settings)` (the arm is *derived* from settings so a run can never be filed under a configuration that did not produce it), `save`, `load_all(arm)`, `arms()` | `questions.json`, `recordings/` |
 | `eval/questions.json` [O-11] | The frozen, **append-only** ten-question set — broad single-area survey prompts. Rewording one invalidates every earlier recording (D-088) | read by `load_questions("broad")` |
 | `eval/questions-narrow.json` [O-14] | Ten **intersection** questions, each spanning two or three of the same areas the broad set covers separately. Built to be the case recursion should win, so D-094's null result can be attributed to the feature rather than to the questions | read by `load_questions("narrow")` |
+| `eval/enrich.py` [D-108] | The offline full-text pass: fetch, chunk and index papers the recorded contexts used, rate-limited like a search. A script rather than a graph node **because the production question only matters if full text helps** -- and it did not (D-111) | `sources/fulltext`, `persistence/corpus` |
+| `eval/corpus_coverage.py` [D-104, D-106] | Derives `MIN_LOCAL_PAPERS` from committed recordings with no API key. Holds the frozen `OUT_OF_DOMAIN` control -- the negative population the first version of this experiment lacked | `persistence/corpus`, `recording.load_all` |
 | `eval/compare.py` [D-094] | Paired comparison of two arms, run as `python -m tests.eval.compare <arm-a> <arm-b>`. Pairs by question id, reports the mean paired difference in standard errors, and refuses arms that share no questions | `recording.load_all`, `results.json` |
 | `eval/test_compare.py` [D-094] | The analysis arithmetic on synthetic arms with hand-computable answers: pairing by id not position, unshared questions excluded, zero-variance metrics reporting no SE rather than infinity — plus a check that the module still reproduces the numbers D-094's prose quotes | `compare.py` |
 | `eval/test_question_sets.py` [D-088, O-14] | The sets stay well-formed: ids unique within *and across* sets (they key `results.json`), an unknown set name raises rather than silently recording the default, and each file states its own append-only rule | `recording.load_questions` |
@@ -570,6 +593,8 @@ The graph code is identical in all three columns. Only the dependencies passed i
 | `ARXIV_MIN_INTERVAL_SECONDS` [M3] | `agent/config.py` | whoever builds the `ArxivRateLimiter` | D-064 |
 | `MAX_SUBTOPICS` [M3] | `agent/config.py` | `nodes/decompose.py` (prompt + filter cap) | D-070 |
 | `MAX_DEPTH` [M4] | `agent/config.py` | `graph.route_after_gap_check` **and** `coverage._stop_reason` | D-025, D-026, D-076, D-094 |
+| `LOCAL_FIRST`, `MIN_LOCAL_PAPERS`, `LOCAL_SEARCH_TOP_K` [O-13] | `agent/config.py` | `nodes/research_worker._local_answer` | D-104, D-105, D-107 |
+| `EXCERPT_MAX_CHARS` [D-110] | `agent/config.py` | `nodes/research_worker._local_answer` -- **and it selects the retrieval tier**, so retrieval can never select on text synthesis will not read | D-110, D-111 |
 | `SYNTHESIS_TOP_N` [D-091] | `agent/config.py` | `synthesize` (ranks the prompt) **and** `graph.route_after_gap_check` (the sufficiency exit) | D-091, D-092, D-096 |
 | `RECURSION_LIMIT` [M4] | `agent/config.py` | the **caller**, as invoke config — not the graph | D-077 |
 | `MAX_FAILURES` [M3] | `nodes/decompose.py` | the N=2 retry cap | D-020 |
