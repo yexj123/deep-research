@@ -312,3 +312,122 @@ def test_the_prompt_stays_scoped_to_claim_support() -> None:
     prompt = system_prompt("abcd")
     assert "not reviewing the writing" in prompt
     assert "ignore style, structure, completeness" in prompt
+
+
+# ---- bug hunt: does "checked" always mean what it says? (D-115) ----------------------
+
+
+@pytest.mark.asyncio
+async def test_a_disabled_checker_does_not_report_a_clean_review() -> None:
+    """MAX_CLAIMS_CHECKED = 0 disables judging. It must not report "checked, found none".
+
+    That is the exact D-084 ambiguity this node was written to avoid, reintroduced by the
+    off switch: `claims[:0]` is empty, the no-claims branch returns `claims_checked=True`,
+    and a review nobody verified renders as verified.
+    """
+    import deep_research.agent.nodes.check_claims as module
+
+    review = f"Tiling helps [arXiv:{PAPER}]."
+    original = module.MAX_CLAIMS_CHECKED
+    module.MAX_CLAIMS_CHECKED = 0
+    try:
+        update, factory = await _run(_state(review), claim_report(judged=1))
+    finally:
+        module.MAX_CLAIMS_CHECKED = original
+
+    assert factory.models_built == 0, "disabled means no paid call"
+    assert update["claims_checked"] is False, "disabled is NOT the same as verified clean"
+
+
+@pytest.mark.asyncio
+async def test_truncated_claims_are_not_reported_as_fully_checked() -> None:
+    """A review with more claims than the cap leaves some unjudged (D-115).
+
+    Silently returning `claims_checked=True` would tell the reader every sentence was
+    verified when the tail never reached the model -- success reported for less work than
+    assumed, which is the failure shape this project is built around.
+    """
+    import deep_research.agent.nodes.check_claims as module
+
+    review = " ".join(f"Claim {i} holds [arXiv:{PAPER}]." for i in range(6))
+    original = module.MAX_CLAIMS_CHECKED
+    module.MAX_CLAIMS_CHECKED = 3
+    try:
+        update, _ = await _run(_state(review), claim_report(judged=3))
+    finally:
+        module.MAX_CLAIMS_CHECKED = original
+
+    assert update["claims_checked"] is False, "3 of 6 judged is not a checked review"
+    assert "3 of 6" in update.get("claim_check_error", "")
+
+
+@pytest.mark.asyncio
+async def test_a_run_without_synthesized_from_still_checks_its_claims() -> None:
+    """Old checkpoints predate `synthesized_from` (D-091), and check_citations falls back.
+
+    Without the same fallback here, resuming such a run reports every claim as unverifiable
+    -- the two verifiers would disagree about which papers the model was shown.
+    """
+    review = f"Tiling helps [arXiv:{PAPER}]."
+    state = _state(review, synthesized_from=[])
+    update, factory = await _run(state, claim_report(judged=1))
+
+    assert factory.models_built == 1, "it must fall back to every retrieved paper"
+    assert update["claims_checked"] is True
+
+
+def test_an_abbreviation_does_not_split_a_claim_in_half() -> None:
+    """"Smith et al." must not end a sentence (D-115).
+
+    Naive splitting on punctuation alone cuts "Smith et al. showed X [arXiv:Y]." into "Smith et al." and
+    "showed X [arXiv:Y]." -- and the checker then judges a fragment with no subject. "et al."
+    and "Fig." are routine in a literature review, so this is the common case, not an edge.
+    """
+    review = f"Smith et al. showed a 2.1x speedup [arXiv:{PAPER}]."
+    claims = extract_claims(review, {PAPER})
+
+    assert len(claims) == 1
+    assert claims[0][0].startswith("Smith et al."), claims[0][0]
+
+
+def test_a_figure_reference_does_not_split_a_claim() -> None:
+    """The same defect with a different abbreviation, so a fix cannot special-case one word."""
+    review = f"As Fig. 2 shows, tiling helps [arXiv:{PAPER}]."
+    claims = extract_claims(review, {PAPER})
+
+    assert len(claims) == 1
+    assert claims[0][0].startswith("As Fig. 2"), claims[0][0]
+
+
+def test_genuine_sentence_boundaries_still_split() -> None:
+    """The control: a real boundary must still separate two claims.
+
+    Without this, "never split" would pass both tests above while making every review one
+    enormous claim.
+    """
+    review = f"Tiling helps [arXiv:{PAPER}]. Routing differs [arXiv:{OTHER}]."
+    claims = extract_claims(review, {PAPER, OTHER})
+
+    assert len(claims) == 2
+    assert claims[0][1] == (PAPER,) and claims[1][1] == (OTHER,)
+
+
+@pytest.mark.asyncio
+async def test_a_claim_judged_twice_is_listed_once() -> None:
+    """A model may repeat a judgement; the reader should not see the sentence twice.
+
+    External data is validated for shape, then still range- and duplicate-checked, because a
+    well-formed reply can describe the same claim more than once (D-013).
+    """
+    review = f"It reaches 2.1x [arXiv:{PAPER}]."
+    reply = json.dumps(
+        {
+            "judgements": [
+                {"claim": 1, "supported": False, "why": "no number in the evidence"},
+                {"claim": 1, "supported": False, "why": "no number in the evidence"},
+            ]
+        }
+    )
+    update, _ = await _run(_state(review), reply)
+
+    assert len(update["unsupported_claims"]) == 1

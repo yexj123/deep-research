@@ -46,9 +46,19 @@ from deep_research.agent.state import ResearchState
 CheckClaimsNode = Callable[[ResearchState, Runtime[RunContext]], Awaitable[dict[str, Any]]]
 
 # A claim is a sentence carrying at least one citation. Split on sentence-ending punctuation
-# followed by whitespace -- deliberately simple, because a cleverer splitter would give false
-# precision to something that only has to group a claim with its citation.
-SENTENCE_SPLIT: re.Pattern[str] = re.compile(r"(?<=[.!?])\s+")
+# followed by whitespace **and a capital letter**.
+#
+# The capital is what makes this usable rather than merely simple (D-115). Splitting on
+# punctuation alone cuts "Smith et al. showed a 2.1x speedup [arXiv:...]" into "Smith et al."
+# and "showed a 2.1x speedup [...]", handing the checker a fragment with no subject -- and
+# "et al.", "Fig." and "e.g." are routine in a literature review, so that is the common case
+# rather than an edge one. Requiring a capital handles every abbreviation at once, without a
+# list of words to keep current.
+#
+# The cost is a genuine boundary followed by a lowercase word, which does not happen in prose
+# the synthesis prompt asks for. Still deliberately simple: a full sentence tokenizer would
+# give false precision to something that only has to group a claim with its citation.
+SENTENCE_SPLIT: re.Pattern[str] = re.compile(r"(?<=[.!?])\s+(?=[A-Z])")
 
 
 class Judgement(BaseModel):
@@ -131,12 +141,27 @@ def make_check_claims(model_factory: ModelFactory) -> CheckClaimsNode:
     async def check_claims(
         state: ResearchState, runtime: Runtime[RunContext]
     ) -> dict[str, Any]:
-        shown = {
-            source.arxiv_id: source
-            for source in state.sources
-            if source.arxiv_id in set(state.synthesized_from)
-        }
-        claims = extract_claims(state.review, set(shown))[:MAX_CLAIMS_CHECKED]
+        if MAX_CLAIMS_CHECKED <= 0:
+            # Disabled. Reported as *not checked*, never as clean: `claims[:0]` is empty, and
+            # falling into the no-claims branch below would render an unverified review as
+            # verified -- the D-084 ambiguity this node exists to avoid, reintroduced by its
+            # own off switch (D-115).
+            return {
+                "unsupported_claims": [],
+                "claims_checked": False,
+                "claim_check_error": "claim checking is disabled (MAX_CLAIMS_CHECKED = 0)",
+            }
+
+        # Same fallback as `check_citations` (D-046): runs recorded before `synthesized_from`
+        # existed, and the zero-sources path where synthesize never builds a prompt (D-060).
+        # Without it the two verifiers disagree about which papers the model was shown, and a
+        # resumed old run reports every claim as unverifiable (D-115).
+        shown_ids = set(state.synthesized_from) or {s.arxiv_id for s in state.sources}
+        shown = {s.arxiv_id: s for s in state.sources if s.arxiv_id in shown_ids}
+
+        found = extract_claims(state.review, set(shown))
+        claims = found[:MAX_CLAIMS_CHECKED]
+        unchecked = len(found) - len(claims)
         if not claims:
             # No cited sentences: a zero-sources review (D-060), or a review that cited
             # nothing. Checked and clean, not skipped.
@@ -176,14 +201,32 @@ def make_check_claims(model_factory: ModelFactory) -> CheckClaimsNode:
             }
 
         unsupported: list[str] = []
+        seen: set[int] = set()
         for judgement in report.judgements:
             index = judgement.claim - 1
-            if judgement.supported or not 0 <= index < len(claims):
+            # Range-checked *and* deduplicated: a well-formed reply can still name a claim
+            # that was never asked about, or name the same one twice, and neither should reach
+            # the reader as a crash or a repeated sentence (D-013, D-115).
+            if judgement.supported or not 0 <= index < len(claims) or index in seen:
                 continue
+            seen.add(index)
             text, cited = claims[index]
             reason = f" -- {judgement.why}" if judgement.why else ""
             unsupported.append(f"{text} [cites {', '.join(cited)}]{reason}")
 
+        if unchecked:
+            # The tail never reached the model. Reporting this as checked would tell the
+            # reader every sentence was verified when some were not -- success claimed for
+            # less work than was done, which is the shape this project is built around
+            # (D-062, D-069, D-115).
+            return {
+                "unsupported_claims": unsupported,
+                "claims_checked": False,
+                "claim_check_error": (
+                    f"only {len(claims)} of {len(found)} claims were checked "
+                    f"(MAX_CLAIMS_CHECKED = {MAX_CLAIMS_CHECKED})"
+                ),
+            }
         return {"unsupported_claims": unsupported, "claims_checked": True}
 
     return check_claims

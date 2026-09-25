@@ -200,11 +200,23 @@ def index_full_text(
             raise ValueError(f"cannot index full text for unknown paper {arxiv_id!r}")
 
         added = 0
+        # **Labels are made unique before insert, not assumed unique** (D-115). Papers repeat
+        # headings -- two distinct "Method" sections are common -- and `chunk_paper` numbers
+        # pieces only when *one* section is split, so both arrive labelled "Method". The
+        # UNIQUE constraint then turns the second into an INSERT OR IGNORE no-op: a whole
+        # section of the paper discarded, with the insert reporting success. Disambiguating
+        # here rather than in `chunk_paper` protects every caller, since this function takes
+        # (section, text) pairs from anywhere.
+        #
+        # Deterministic, so re-enrichment still produces identical labels and stays idempotent.
+        seen: dict[str, int] = {}
         for section, text in chunks:
+            seen[section] = seen.get(section, 0) + 1
+            label = section if seen[section] == 1 else f"{section} #{seen[section]}"
             cursor = db.execute(
                 "INSERT OR IGNORE INTO chunks (arxiv_id, tier, section, text)"
                 " VALUES (?, ?, ?, ?)",
-                (arxiv_id, FULL_TEXT, section, text),
+                (arxiv_id, FULL_TEXT, label, text),
             )
             added += cursor.rowcount or 0
         db.execute("UPDATE papers SET has_full_text = 1 WHERE arxiv_id = ?", (arxiv_id,))

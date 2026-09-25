@@ -537,3 +537,40 @@ def test_the_work_list_ignores_papers_the_corpus_does_not_have(db) -> None:
     """Full text enriches what the corpus knows; it never introduces a paper."""
     index_sources(db, PAPERS)
     assert papers_without_full_text(db, ["9999.99999"]) == []
+
+
+def test_two_sections_with_the_same_heading_both_survive(db) -> None:
+    """Papers repeat headings, and a collision here silently discards a section (D-115).
+
+    `chunk_paper` numbers pieces only when one section is split. Two *distinct* sections both
+    called "Method" each produce one chunk labelled "Method", and `UNIQUE(arxiv_id, tier,
+    section)` makes the second an INSERT OR IGNORE no-op -- a whole section of a paper gone,
+    with the insert reporting success.
+    """
+    index_sources(db, PAPERS)
+    target = PAPERS[0].arxiv_id
+    added = index_full_text(
+        db,
+        target,
+        [("Method", "first method section about tiling"),
+         ("Method", "second method section about quantization")],
+    )
+
+    assert added == 2, "both sections must be stored"
+    hits = {h.section for h in search(db, build_fts_query("quantization tiling"), limit=20,
+                                     tier=FULL_TEXT)}
+    assert len(hits) == 2, hits
+
+
+def test_re_enriching_with_duplicate_headings_is_still_idempotent(db) -> None:
+    """Disambiguation must be deterministic, or every re-run doubles the corpus (D-100).
+
+    A label scheme using a random suffix or insertion id would make the second pass look like
+    new chunks, inflating each paper's own BM25 term frequencies -- the exact bug the
+    idempotence rule exists to prevent.
+    """
+    index_sources(db, PAPERS)
+    chunks = [("Method", "first about tiling"), ("Method", "second about routing")]
+
+    assert index_full_text(db, PAPERS[0].arxiv_id, chunks) == 2
+    assert index_full_text(db, PAPERS[0].arxiv_id, chunks) == 0

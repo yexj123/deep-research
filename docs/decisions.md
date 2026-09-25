@@ -2466,6 +2466,50 @@ evaluation harness, not by carrying data through production in case someone asks
 anything added back has to be justified rather than accumulating unnoticed in something that
 gets checkpointed.
 
+### D-115 - Six bugs in code written the same day, five of them silent
+
+A deliberate review pass over D-113 and D-108's code, written hours earlier. **Five of the six
+reported success for work that had not happened** -- this project's recurring shape, found in
+its own newest code by looking for it rather than by waiting for it to surface.
+
+| # | Bug | What it reported |
+|---|---|---|
+| 1 | `MAX_CLAIMS_CHECKED = 0` fell into the no-claims branch | a **disabled** checker rendered as "checked, clean" |
+| 2 | Claims past the cap were dropped | `claims_checked = True` for a review where the tail never reached the model |
+| 3 | No `synthesized_from` fallback | a resumed pre-D-091 run reported every claim unverifiable |
+| 4 | Sentence split on any `.` + space | "Smith **et al.** showed 2.1x" judged as the fragment "showed 2.1x" |
+| 5 | Repeated judgements not deduplicated | the same sentence listed twice to the reader |
+| 6 | Duplicate section headings collided on `UNIQUE(arxiv_id, tier, section)` | a whole section discarded, **insert reporting success** |
+
+**1 and 2 are the same mistake as the bug the node was written to avoid.** D-084 removed the
+ambiguity between "checked, found none" and "never checked" for citations; `check_claims`
+reintroduced it twice -- once through its own off switch, once through its own cap. Both now
+return `claims_checked = False` with a `claim_check_error` naming the reason
+(`"only 3 of 6 claims were checked"`).
+
+**4 is the one that would have degraded output quietly rather than loudly.** *"et al."*,
+*"Fig."* and *"e.g."* are routine in a literature review, so splitting on punctuation alone
+was wrong in the **common** case, not an edge one -- and the checker would have judged
+subject-less fragments while reporting a clean run. Fixed by requiring a capital letter after
+the boundary, which handles every abbreviation at once without a word list to maintain.
+
+**6 was silent data loss in storage.** `chunk_paper` numbers pieces only when *one* section is
+split, so two distinct "Method" sections both arrive labelled "Method" and `INSERT OR IGNORE`
+drops the second. Fixed in `index_full_text` rather than `chunk_paper`, because that function
+owns the constraint and accepts `(section, text)` pairs from any caller. The disambiguation is
+deterministic (`"Method #2"`), so re-enrichment stays idempotent -- a random or rowid-based
+suffix would have made every pass look like new chunks and inflated each paper's own BM25 term
+frequencies, which is the bug D-100's idempotence rule exists to prevent.
+
+**How much data #6 actually cost cannot be measured retroactively**, and that is worth stating
+plainly: the dropped chunks were never written, so no query over the corpus can find them. The
+two committed fixtures produce no duplicate labels, which is weak evidence at n=2. Re-running
+enrichment would settle it at the cost of ~18 minutes.
+
+**What found them:** writing a failing test for each suspicion before looking at the fix. Three
+of the six were suspected from reading the code and confirmed by a red test; the other three
+surfaced while writing tests for the first three.
+
 ## Open (proposed, not decided)
 
 **Settled 2026-09-20:** O-1 → D-064, O-2 → D-065, O-3 → D-066.
