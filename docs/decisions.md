@@ -2561,6 +2561,61 @@ pypdf skipping form content, and D-109's surrogate killing a whole pass -- each 
 success, or near enough, for less work than was done. Storage, parsing and iteration each
 found their own way to do it.
 
+### D-117 - Models fence their JSON, and it has been costing runs since D-089
+
+**Found by `/demo-check` on its first live run of the claim checker**, which reported itself
+unable to read its own reply. The reply:
+
+    ```json
+    {"judgements": [{"claim": 1, "supported": true}]}
+    ```
+
+`model_validate_json` rejects that at column 1. **The same code had worked in an isolated test
+an hour earlier**, which got a bare object back -- the fence appears on some samples and not
+others, so a single manual check cannot find it and a unit test with a scripted reply never
+will.
+
+**The same vulnerability was in `decompose` from the beginning.** That makes this the most
+likely explanation for a failure this project has carried since D-089:
+
+> *"Planner JSON failure: 1 run in 10 died with `ValidationError` on an unparseable plan, and
+> the same question succeeded on retry."*
+
+A fence that appears intermittently fits exactly: a retry is a fresh sample, and most samples
+are unfenced. **Plausible, not proven** -- D-089 recorded the rate, not the reply text that
+caused it -- but the fix is harmless either way and far cheaper than the repair-retry D-070
+left open. If the rate does not fall, that open item is still there.
+
+**`strip_code_fence` is deliberately narrow.** It removes a fence wrapping the *whole* reply
+and nothing else. A model returning prose around its JSON is not following the prompt, and
+digging the object out of the middle would hide that -- moving a loud failure to an invisible
+one, which is the direction this project refuses. A test pins that prose is left alone.
+
+`decompose` still does not catch the error after stripping (D-070): an unparseable plan means
+no research happened, and crashing is correct.
+
+### D-118 - The progress trail announced a search that never happened
+
+Also from `/demo-check`. A run answered entirely from the corpus produced this trail:
+
+```
+- Searching arXiv for 'Speculative decoding in language models'
+- Answered 'Speculative decoding in language models' from 20 local paper(s)
+```
+
+**No arXiv request was made.** The message was emitted before the corpus check, so it
+announced a network call that the very next line contradicts -- and a reader would reasonably
+conclude both happened.
+
+**Reporting work that was not done is the same defect as hiding work that was.** It just
+flatters instead of alarming, which is why it survived a code review and needed a live run to
+surface. The worker now says `Researching 'X'` before it knows, and `Searching arXiv for 'X'`
+at the point the call is actually about to happen.
+
+Two tests: a locally-answered subtopic must never print "Searching arXiv", and -- the control
+-- a subtopic that does reach the network must still say so, or deleting the message entirely
+would pass the first test while leaving a long wait unexplained on screen.
+
 ## Open (proposed, not decided)
 
 **Settled 2026-09-20:** O-1 → D-064, O-2 → D-065, O-3 → D-066.

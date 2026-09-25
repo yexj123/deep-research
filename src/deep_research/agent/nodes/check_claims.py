@@ -41,6 +41,7 @@ from deep_research.agent.context import RunContext
 from deep_research.agent.llm import ModelFactory
 from deep_research.agent.nodes.check_citations import CITATION_MARKER
 from deep_research.agent.nodes.synthesize import new_fence
+from deep_research.agent.replies import strip_code_fence
 from deep_research.agent.state import ResearchState
 
 CheckClaimsNode = Callable[[ResearchState, Runtime[RunContext]], Awaitable[dict[str, Any]]]
@@ -188,7 +189,9 @@ def make_check_claims(model_factory: ModelFactory) -> CheckClaimsNode:
             reply = await model.ainvoke(
                 [("system", system_prompt(fence)), ("human", human)]
             )
-            report = ClaimReport.model_validate_json(reply.text)
+            # Models wrap JSON in a markdown fence often enough that this is the
+            # common case, not a defensive one -- /demo-check caught it live (D-117).
+            report = ClaimReport.model_validate_json(strip_code_fence(reply.text))
         except (ValidationError, ValueError) as exc:
             # **Recorded, never fatal.** The review already exists and is already
             # ID-verified; a checker that cannot parse its own reply must not destroy a

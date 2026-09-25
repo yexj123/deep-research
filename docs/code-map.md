@@ -285,6 +285,15 @@ event loop that uses it, so the web layer must create it inside the app lifespan
 Its model call streams tokens in `messages` mode automatically; the node doesn't stream them itself.
 **Registered by:** `graph.py`, as `"synthesize"`, via `make_synthesize(model_factory)`.
 
+### `agent/replies.py` [D-117]
+**Defines:** `strip_code_fence`, which removes a markdown fence wrapping a whole model reply.
+**Uses:** nothing. **Used by:** `nodes/decompose.py` and `nodes/check_claims.py`, the two
+places that parse JSON out of a model reply.
+
+Deliberately narrow: it does **not** extract JSON from the middle of prose. A model that
+wraps its object in commentary is not following the prompt, and digging it out would turn a
+loud failure into an invisible one.
+
 ### `agent/nodes/check_claims.py` [D-113]
 **Defines:** `make_check_claims` (a closure over the model factory, D-032), `extract_claims`,
 `system_prompt`, and the `Judgement` / `ClaimReport` validation models.

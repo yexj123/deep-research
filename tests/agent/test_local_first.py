@@ -256,3 +256,44 @@ async def test_excerpts_reach_the_model_when_enabled(local_first, corpus, monkey
     assert any("2.1x speedup" in paper.excerpt for paper in update["sources"]), (
         "the passage that matched must be what the model is shown"
     )
+
+
+@pytest.mark.asyncio
+async def test_a_local_answer_never_claims_to_have_searched_arxiv(local_first, corpus, monkeypatch) -> None:
+    """The progress trail must not announce a call that never happens (D-118).
+
+    Found by /demo-check: the trail read "Searching arXiv for X" followed immediately by
+    "Answered X from 20 local paper(s)", and a reader would reasonably conclude both
+    happened. Reporting work that was not done is the same defect as hiding work that was --
+    it just flatters instead of alarming.
+    """
+    messages: list[dict] = []
+    monkeypatch.setattr(
+        "deep_research.agent.nodes.research_worker._progress_writer", lambda: messages.append
+    )
+    index_sources(corpus, COVERED)
+
+    _, requests = await _run(corpus)
+
+    assert requests == [], "precondition: this subtopic is answered locally"
+    trail = " | ".join(m.get("status", "") for m in messages)
+    assert "Searching arXiv" not in trail, trail
+    assert "local paper(s)" in trail
+
+
+@pytest.mark.asyncio
+async def test_an_arxiv_search_is_still_announced(local_first, corpus, monkeypatch) -> None:
+    """The control: when the call does happen, the trail must say so.
+
+    Without this, deleting the message entirely would pass the test above while leaving a
+    long network wait unexplained on screen.
+    """
+    messages: list[dict] = []
+    monkeypatch.setattr(
+        "deep_research.agent.nodes.research_worker._progress_writer", lambda: messages.append
+    )
+    index_sources(corpus, COVERED)
+
+    await _run(corpus, subtopic="crystallography of perovskite lattices")
+
+    assert any("Searching arXiv" in m.get("status", "") for m in messages)

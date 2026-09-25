@@ -184,7 +184,12 @@ def make_research_worker(
         # Live progress for a long run (O-5). Derived from the same facts as the state
         # update below, so the two cannot drift: one place decides what happened.
         writer = _progress_writer()
-        writer({"status": f"Searching arXiv for {subtopic!r}"})
+        # "Researching", not "Searching arXiv": at this point it is not yet known whether the
+        # corpus can answer this subtopic, and announcing a network call that may never happen
+        # is the progress trail claiming work it did not do (D-118). Found by /demo-check,
+        # which showed "Searching arXiv for X" followed immediately by "Answered X from 20
+        # local paper(s)" -- a reader would reasonably conclude both happened.
+        writer({"status": f"Researching {subtopic!r}"})
         # Outside the try on purpose: decompose guarantees the subtopic is searchable (D-073),
         # so a ValueError here is a bug and must crash rather than burn the retry cap. Built
         # before the corpus check so a malformed subtopic fails the same way either way --
@@ -201,6 +206,8 @@ def make_research_worker(
                 "local_subtopics": [subtopic],  # reported, never hidden (D-105)
             }
 
+        # Announced here, where the call is about to actually happen (D-118).
+        writer({"status": f"Searching arXiv for {subtopic!r}"})
         try:
             async with limiter:  # held across the request, not just its start (D-064)
                 result = await search_arxiv(http_client, query, ARXIV_MAX_RESULTS)

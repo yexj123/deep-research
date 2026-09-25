@@ -11,6 +11,7 @@ from deep_research.agent.config import MAX_SUBTOPICS
 from deep_research.agent.context import RunContext
 from deep_research.agent.llm import ModelFactory
 from deep_research.agent.sources.arxiv import build_search_query
+from deep_research.agent.replies import strip_code_fence
 from deep_research.agent.state import ResearchState, normalize_subtopic
 
 DecomposeNode = Callable[[ResearchState, Runtime[RunContext]], Awaitable[dict[str, Any]]]
@@ -80,7 +81,11 @@ def make_decompose(model_factory: ModelFactory) -> DecomposeNode:
 
         reply = await model.ainvoke([("system", SYSTEM_PROMPT), ("human", human)])
         # Catches nothing: with one planner there's nothing to continue with (D-070).
-        plan = SubtopicPlan.model_validate_json(reply.text)
+        # The fence is stripped first: D-089 measured 1 run in 10 dying here on an
+        # unparseable plan, and a markdown-fenced reply is the most likely cause
+        # (D-117). Still no catch -- an unparseable plan after stripping is a real
+        # failure and must crash rather than silently research nothing.
+        plan = SubtopicPlan.model_validate_json(strip_code_fence(reply.text))
 
         return {
             "pending_subtopics": _keep_worth_researching(plan.subtopics, state),
