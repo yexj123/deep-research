@@ -14,6 +14,10 @@ Backed by `CLAUDE.md`, the output style, and `Edit(/tests/**)`, `Edit(/docs/**)`
 
 ## Do next (you)
 
+- [ ] **D-070: the planner repair-retry is still open** (D-119). D-089 measured 1 run in 10
+      dying on an unparseable plan; the fence fix does *not* explain it (0 of 120 calls), so
+      the cause is unknown. Before building a retry, re-measure the failure rate -- 120 clean
+      calls suggest the original number may not reproduce
 - [ ] *(Optional)* Delete the old 55 MB uv cache on C::
       `uv cache clean --cache-dir "$env:LOCALAPPDATA\uv\cache"`
 - [x] Fixed the four truncated comments in `state.py`
@@ -72,6 +76,16 @@ them is the lesson:
 | Reading the code with tests written to fail first | **6** (D-115) | five reported success for work that had not happened |
 | Re-running enrichment to measure one of them | **1** (D-116) | pypdf truncates extraction and only *warns* |
 | Driving the real app (`/demo-check`) | **2** (D-117, D-118) | neither was reachable by the suite as written |
+
+**D-119 withdrew a claim D-117 made.** The fence fix was credited with explaining D-089's
+*"1 run in 10 died on an unparseable plan"*. Measured over **120 real planner calls: zero
+fenced replies**, which excludes a 3% per-call rate at p = 0.026. The fix stays -- fences are
+real and broke `check_claims` -- but **D-070's repair-retry is still open**, and D-089's own
+1-in-10 figure now looks like a single incident generalised.
+
+The first attempt at that measurement used 20 trials and also returned zero, which looks like
+the same answer and is not one: at 3%, 0/20 happens 54% of the time. Stopping there would have
+been the thin-data inference D-079 warns about, committed while claiming to test for it.
 
 **D-117 is the one that matters beyond this project.** A model wrapped its JSON in a markdown
 fence, and `model_validate_json` rejected it. The same code had passed an isolated test an

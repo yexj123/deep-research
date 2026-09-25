@@ -2575,8 +2575,12 @@ an hour earlier**, which got a bare object back -- the fence appears on some sam
 others, so a single manual check cannot find it and a unit test with a scripted reply never
 will.
 
-**The same vulnerability was in `decompose` from the beginning.** That makes this the most
+**The same vulnerability was in `decompose` from the beginning.** That looked like the most
 likely explanation for a failure this project has carried since D-089:
+
+> **Measured and withdrawn -> D-119.** 120 real planner calls produced **zero** fenced
+> replies, which excludes a 3% per-call rate at p = 0.026. The fix stays -- fences are real
+> and broke `check_claims` -- but it does not explain D-089, and **D-070 remains open**.
 
 > *"Planner JSON failure: 1 run in 10 died with `ValidationError` on an unparseable plan, and
 > the same question succeeded on retry."*
@@ -2615,6 +2619,52 @@ at the point the call is actually about to happen.
 Two tests: a locally-answered subtopic must never print "Searching arXiv", and -- the control
 -- a subtopic that does reach the network must still say so, or deleting the message entirely
 would pass the first test while leaving a long wait unexplained on screen.
+
+### D-119 - The fence hypothesis was wrong, and D-070 is still open
+
+D-117 proposed markdown code fences as the likely cause of D-089's *"1 run in 10 died with
+`ValidationError` on an unparseable plan"*, and said so as a hypothesis. **Measured: it is
+not.**
+
+**120 real planner calls**, the production prompt, the ten frozen questions, twelve samples
+each:
+
+| | |
+|---|---|
+| replies wrapped in a fence | **0** (0%) |
+| would fail without the fix | **0** |
+| reply openings observed | `{"subtopics"` x120 |
+
+D-089's rate implies roughly **3% per call** (it said so itself: *"a ~3% per-call failure rate
+implies roughly 11% of runs dying"*). At 3%, seeing zero failures in 120 trials has
+probability 0.97^120 = **2.6%**. The hypothesis is excluded, not merely unsupported.
+
+**The first attempt at this experiment was underpowered and I nearly stopped there.** Twenty
+trials also returned zero -- which looks like the same answer and is not one: at a 3% rate,
+0/20 happens 54% of the time. Twenty trials cannot distinguish 0% from 3%, and reporting
+"refuted" from them would have been the thin-data inference D-079 warns about, committed while
+claiming to test for it.
+
+**What stands and what does not:**
+
+- **The fix stays.** Fences are real: `/demo-check` caught one live, from `check_claims`, and
+  it broke that node (D-117). Stripping them is correct.
+- **The attribution to D-089 is withdrawn.** Whatever killed those planner calls, it was not a
+  code fence, and **D-070's repair-retry is still genuinely open** -- not quietly fixed, which
+  is what the D-117 commit message implied.
+- **D-089's own number now looks shaky.** A rate measured once at 1-in-10, against 0 failures
+  in 120 calls on the same model with the same prompt, may have been a single incident
+  generalised. It was recorded as a rate from one observation, which is the error D-079
+  documents.
+
+**An asymmetry worth noting, untested:** the planner never fenced, while the claim checker
+did. The prompts differ -- the planner asks for *"JSON only, in exactly this shape"* with the
+literal shape inline, the checker asks for *"JSON only"* plus a longer, nested example and a
+conditional field. A more specified shape may leave less room for decoration. That is a
+plausible mechanism, offered as one, and it would take its own 120 trials to establish.
+
+**Cost:** 140 planner calls, no arXiv, no synthesis, a few minutes. Cheap enough that "measure
+it" should have been the first response to the hypothesis rather than the second.
 
 ## Open (proposed, not decided)
 
