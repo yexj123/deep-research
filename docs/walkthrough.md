@@ -26,7 +26,7 @@ START → intake → decompose → (Send per subtopic) → research_worker → g
                                                                          │
                                              synthesize ←────────────────┘
                                                   │
-                                             check_citations → END
+                                    check_claims → check_citations → END
 ```
 
 ### Step 0 — The caller builds four dependencies
@@ -195,7 +195,48 @@ third-party text.
 `NO_SOURCES_REVIEW` (D-060). Zero results is a success (D-021), and there's no model output
 that could invent a citation. The cost: that run streams nothing in `messages` mode.
 
-### Step 7 — `check_citations`
+### Step 7 — `check_claims`
+
+`check_citations` (next) verifies the **ID**. This verifies the **claim** — the one thing here
+that cannot be checked deterministically, which is why it is the only place a model judges
+anything (D-113).
+
+It extracts every sentence carrying a citation, numbers them, and asks in **one call** whether
+each is supported by the paper it cites:
+
+```
+Claims:
+1. Automated literature review can be approached with retrieval-augmented generation [arXiv:2411.18583].
+2. The system achieves a 94.3% ROUGE-L score on PubMed abstracts [arXiv:2411.18583].
+
+<evidence-a1b2c3d4e5f60718>
+[arXiv:2411.18583] Automated Literature Review Using NLP Techniques
+This research presents and compares multiple approaches to automate...
+</evidence-a1b2c3d4e5f60718>
+```
+
+Captured from a real call against that input, claim 2 came back:
+
+> *"No mention of ROUGE-L score or 94.3% in the evidence."*
+
+**Three things about this step are deliberate and easy to get wrong:**
+
+- **The evidence is `excerpt or summary` for papers in `synthesized_from`** — exactly what
+  step 6 put in front of the writer. D-110 measured a 3.1 SE faithfulness drop when retrieval
+  and synthesis read different text; a checker reading different text again would flag
+  supported claims for the same reason, pointing the other way.
+- **A parse failure is recorded, not raised.** `claims_checked` goes False with a
+  `claim_check_error`, and the run finishes. The inverse of `decompose` (D-070): an
+  unparseable *plan* means no research happened, so crashing is right; an unparseable
+  *judgement* means a finished, ID-verified review went unverified.
+- **It runs before `check_citations`** so `citations_checked` stays the last field any node
+  writes — D-084 made it the terminal completion marker.
+
+The evidence block carries the same nonce fence as the synthesis prompt (D-097). A checker is
+a *more* attractive injection target than a writer: text that talks its way past the thing
+verifying it defeats the verification, not just the prose.
+
+### Step 8 — `check_citations`
 
 Finds every citation **attempt**, then tries to parse each one:
 
@@ -270,6 +311,9 @@ skipped_entries     = 0
 depth               = 1                        # one round completed
 seen_before_round   = 3                        # the baseline round 2 was measured against
 empty_before_round  = 0                        # the same baseline for zero-result searches (D-096)
+local_subtopics     = []                       # nothing answered from the corpus here (D-105)
+unsupported_claims  = []                       # every cited sentence checked out (D-113)
+claims_checked      = True                     # checked, not merely empty (D-084's lesson)
 citation_violations = []
 synthesized_from    = ['2411.18583', '2510.22344', '2502.00306']
 citations_checked   = True                     # the terminal completion marker (D-084)
@@ -288,7 +332,8 @@ that it exercises a path production almost never takes.
 
 Six of these fields are written by **parallel** workers, so each needs a reducer or LangGraph
 raises `InvalidUpdateError` (D-067). `pending_subtopics`, `depth`, `seen_before_round` and
-`empty_before_round` have single writers and deliberately have none.
+`empty_before_round` have single writers and deliberately have none, as do `unsupported_claims` and
+`claims_checked`.
 
 ---
 
@@ -411,6 +456,7 @@ and is worse than no example at all. Re-capture whenever any of these change:
 | Stream modes, or where tokens come from | the stream-order block and the note under it |
 | A new milestone's graph shape | most of §1 — rewrite rather than patch (done for milestone 4) |
 | A new reducer, or a field changing writer | the final-state block and the note under it |
+| A node added to the terminal path | the diagram, step headings, the stream-order block, **and `test_recursion.py`'s measured minimum** -- a node there costs one super-step (D-113 moved it 13 -> 14) |
 | A stopping rule added or changed (`agent/exits.py`) | step 5's condition list, the graph diagram's cycle label, and `stopped_because` in the final-state block |
 
 **How the values were captured:** the graph was run against the saved

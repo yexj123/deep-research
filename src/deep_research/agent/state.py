@@ -81,6 +81,16 @@ class ResearchState:
     # grounding has to be against what the model SAW, or a hallucinated ID that happens to
     # match an unshown paper would validate (D-046). Single writer, so no reducer.
     synthesized_from: list[str] = field(default_factory=list)
+    # Cited sentences the checker judged unsupported by the paper they cite (O-12,
+    # D-113). Single writer, so no reducer. Distinct from citation_violations: that is an
+    # *ID* problem (the paper was never retrieved), this is a *claim* problem (the paper is
+    # real, was shown to the model, and does not say this). Measured at 0.18 per 100
+    # citations, the ID risk is nearly gone; this is what is left (D-112).
+    unsupported_claims: list[str] = field(default_factory=list)
+    # False when the checker could not parse its own reply. "Checked and found none" and
+    # "never successfully checked" must not both read as an empty list (D-084's lesson).
+    claims_checked: bool = False
+    claim_check_error: str = ""
     citation_violations: list[str] = field(default_factory=list)
     # Written only by check_citations, the terminal node, so it is the one reliable "this run
     # completed" signal (D-084). `next == ()` is not: a run interrupted at a step boundary

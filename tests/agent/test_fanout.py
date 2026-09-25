@@ -332,7 +332,7 @@ async def test_worker_updates_arrive_as_one_step(
 
     assert node_order.count("research_worker") == 2
     assert node_order[0] == "intake"
-    assert node_order[-1] == "check_citations"
+    assert node_order[-2:] == ["check_claims", "check_citations"]
 
 
 @pytest.mark.asyncio
@@ -345,8 +345,12 @@ async def test_the_planner_also_streams_in_messages_mode(
     """decompose's tokens reach the messages stream too, so consumers must filter by node.
 
     At milestone 2 every messages chunk came from synthesize. From milestone 3 the planner's
-    JSON streams as well -- the web layer must filter on langgraph_node, or raw JSON appears
-    in the user's review.
+    JSON streams as well, and since D-113 the claim checker's does too -- three sources now,
+    and the web layer must filter on langgraph_node or raw JSON appears in the user's review.
+
+    `api/routes/runs.py` filters with an **allowlist** (`!= "synthesize"` drops everything
+    else), which is why adding a model call to the graph is safe. A denylist naming the known
+    non-review nodes would have silently leaked this one the day it landed.
     """
     graph = build_graph(fake_factory, arxiv_ok.client, limiter, checkpointer)
 
@@ -361,7 +365,7 @@ async def test_the_planner_also_streams_in_messages_mode(
         if chunk["type"] == "messages":
             nodes_that_streamed.add(chunk["data"][1]["langgraph_node"])
 
-    assert nodes_that_streamed == {"decompose", "synthesize"}
+    assert nodes_that_streamed == {"decompose", "synthesize", "check_claims"}
 
 
 # ---- ordering, pinned deliberately (D-068) -------------------------------------------

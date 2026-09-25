@@ -285,6 +285,19 @@ event loop that uses it, so the web layer must create it inside the app lifespan
 Its model call streams tokens in `messages` mode automatically; the node doesn't stream them itself.
 **Registered by:** `graph.py`, as `"synthesize"`, via `make_synthesize(model_factory)`.
 
+### `agent/nodes/check_claims.py` [D-113]
+**Defines:** `make_check_claims` (a closure over the model factory, D-032), `extract_claims`,
+`system_prompt`, and the `Judgement` / `ClaimReport` validation models.
+**Uses:** `check_citations.CITATION_MARKER`, `synthesize.new_fence`, `config.MAX_CLAIMS_CHECKED`.
+**Used by:** `graph.py`, between `synthesize` and `check_citations`.
+
+**Runs before `check_citations` on purpose**: D-084 made `citations_checked` the terminal
+completion marker, so a node after it would mean a run reporting itself finished while work
+remained. **It reads `excerpt or summary` for papers in `synthesized_from`** -- exactly what
+the writer saw, because a checker judging different text manufactures D-110's mismatch in
+reverse. **A parse failure is recorded, never raised**: the inverse of D-070, since the review
+already exists and is already ID-verified.
+
 ### `agent/nodes/check_citations.py` [M2]
 **Defines:**
 - `CITATION_BRACKET`, the regex for *any* `[arXiv:...]` bracket;
@@ -492,6 +505,7 @@ Claude writes and maintains every file here (since 2026-09-19; see `CLAUDE.md`).
 | `agent/test_worker_indexing.py` [D-101] | The worker seeds the corpus, idempotently across subtopics; `corpus=None` behaves exactly as before; a broken corpus does **not** fail the subtopic but **is** reported on the progress stream; and a TypeError in indexing still crashes | `make_research_worker`, `persistence/corpus` |
 | `agent/test_fulltext.py` [D-108] | Fetching, extraction and chunking: both heading conventions, references dropped, the chunk size bound, no overlap, and surrogate stripping that does not damage real non-ASCII. Uses a 563-byte PDF built in the test -- **no arXiv PDF is committed, which is a licence decision** (D-008) | `sources/fulltext`, `fixtures/fulltext/*.txt` |
 | `agent/test_local_first.py` [D-105, D-111] | A covered subtopic skips arXiv; a thin or uncovered one does not; the switch works both ways; a broken corpus falls back; and **retrieval is restricted to abstracts when synthesis will not read full text**, making D-110's harmful pairing unreachable | `make_research_worker`, `persistence/corpus` |
+| `agent/test_check_claims.py` [D-113] | Which sentences count as claims, judgement handling including out-of-range indices, and **what the checker is shown** -- asserted on the prompt actually sent, via a capturing factory, because `excerpt or summary` evaluated in the test is a tautology that passes against a node sending the abstract | `make_check_claims`, `extract_claims` |
 | `agent/test_corpus.py` [D-100] | Indexing, BM25 retrieval and the traps: ascending-is-best-first, relevance never negative, idempotent re-indexing, sufficiency counting distinct papers rather than chunks, the tier filter, and six hostile subtopics that cannot break the query — with a control proving the raw form would have raised | `persistence/corpus`, `build_fts_query` |
 | `agent/test_exits.py` [D-096] | That routing and reporting can never disagree: each of the four exits fires on a state built for it, the router stops whenever any fires, and the coverage panel names the one that actually did. Exists because that invariant broke twice (D-094, D-096) | `exit_reason`, `describe`, `summarize_coverage`, `route_after_gap_check` |
 | `agent/test_adaptive_exit.py` [D-096] | The two measured exits: stop when the prompt is already full (`SYNTHESIS_TOP_N` reached) and when most of a round's searches came back empty. Includes the boundary in the direction that costs quality, the per-round baseline that stops cumulative empties latching the exit on, and the thin-question case that must still get its second round | `route_after_gap_check`, `make_source` |

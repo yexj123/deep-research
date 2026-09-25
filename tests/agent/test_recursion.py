@@ -75,9 +75,10 @@ async def _run(routes, replies, thread: str, recursion_limit: int = RECURSION_LI
 async def test_a_full_depth_run_completes_within_the_recursion_limit() -> None:
     """Three productive rounds finish under RECURSION_LIMIT (D-077).
 
-    This is the test that keeps the number honest. RECURSION_LIMIT = 15 against a measured
-    minimum of 13; if the graph grows a node per round, this goes red before a real run
-    dies with GraphRecursionError in front of a judge.
+    This is the test that keeps the number honest, and it has already earned its place:
+    adding `check_claims` (D-113) moved the measured minimum from 13 to 14, and this file is
+    what said so. RECURSION_LIMIT = 15 now carries **one** step of headroom rather than two,
+    so the next node added to the terminal path needs the constant raised with it.
     """
     state = await _run(FRESH_PAPERS_PER_ROUND, THREE_ROUND_PLANS, "full-depth")
 
@@ -95,19 +96,23 @@ async def test_the_depth_exit_fires_before_the_recursion_limit() -> None:
     this would raise GraphRecursionError. Hitting that in real use means the depth logic is
     broken -- fix the exit, don't raise the number.
     """
-    state = await _run(FRESH_PAPERS_PER_ROUND, THREE_ROUND_PLANS, "min-limit", recursion_limit=13)
+    state = await _run(FRESH_PAPERS_PER_ROUND, THREE_ROUND_PLANS, "min-limit", recursion_limit=14)
     assert state.depth == MAX_DEPTH + 1
 
 
 @pytest.mark.asyncio
-async def test_twelve_is_one_step_too_few() -> None:
-    """Pins the measured minimum: 12 super-steps + 1 is required (D-077).
+async def test_thirteen_is_one_step_too_few() -> None:
+    """Pins the measured minimum: 13 super-steps + 1 is required (D-077, D-113).
 
     The control for the test above. Without it, RECURSION_LIMIT could drift far above what's
     needed and nothing would notice. Also documents that LangGraph needs super-steps + 1.
+
+    **It was 12 until `check_claims` landed.** A node on the terminal path costs one
+    super-step, and this pair of tests is the only thing that makes that visible -- the
+    constant itself does not change, so nothing else would have noticed the headroom halving.
     """
     with pytest.raises(GraphRecursionError):
-        await _run(FRESH_PAPERS_PER_ROUND, THREE_ROUND_PLANS, "too-few", recursion_limit=12)
+        await _run(FRESH_PAPERS_PER_ROUND, THREE_ROUND_PLANS, "too-few", recursion_limit=13)
 
 
 # ---- stopping early (D-075) ----------------------------------------------------------

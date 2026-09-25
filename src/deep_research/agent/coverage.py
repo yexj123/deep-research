@@ -31,6 +31,12 @@ class Coverage:
     empty: list[str] = field(default_factory=list)
     # Answered from the local corpus without a fresh arXiv search (O-13, D-105).
     local: list[str] = field(default_factory=list)
+    # Cited sentences the claim checker judged unsupported (O-12, D-113). A *claim*
+    # problem, not an ID problem: the paper is real and was shown to the model.
+    unsupported_claims: list[str] = field(default_factory=list)
+    # False when the checker could not parse its own reply -- so an empty list above
+    # cannot be mistaken for a clean result (D-084's lesson).
+    claims_checked: bool = False
     failed: dict[str, int] = field(default_factory=dict)
     skipped_entries: int = 0
     papers: int = 0
@@ -44,7 +50,14 @@ class Coverage:
         The UI shows the coverage panel only when this is False, so a clean run isn't
         cluttered with a list of nothing.
         """
-        return not self.empty and not self.failed and self.skipped_entries == 0
+        return (
+            not self.empty
+            and not self.failed
+            and self.skipped_entries == 0
+            # An unsupported claim is a limitation of the review itself, and the
+            # sharpest one the panel can report (O-12, D-113).
+            and not self.unsupported_claims
+        )
 
 
 def _stop_reason(values: dict[str, Any]) -> str:
@@ -97,6 +110,8 @@ def summarize_coverage(values: dict[str, Any]) -> Coverage:
         explored=list(values.get("explored_subtopics", [])),
         empty=list(values.get("empty_subtopics", [])),
         local=list(values.get("local_subtopics", [])),
+        unsupported_claims=list(values.get("unsupported_claims", [])),
+        claims_checked=values.get("claims_checked", False),
         failed={first_spelling[key]: count for key, count in attempts.items()},
         skipped_entries=values.get("skipped_entries", 0),
         papers=len(values.get("sources", [])),

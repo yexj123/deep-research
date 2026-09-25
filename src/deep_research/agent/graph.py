@@ -6,7 +6,7 @@ START -> intake -> decompose -> (Send per subtopic) -> research_worker -> gap_ch
                                                                              |
                                         synthesize <-------------------------+
                                              |
-                                        check_citations -> END
+                                        check_claims -> check_citations -> END
 
 The cycle back to `decompose` is the exception rather than the rule: measured over twenty
 questions, 19 of 20 runs stop after a single round because that round already filled the
@@ -26,6 +26,7 @@ from deep_research.agent.context import RunContext
 from deep_research.agent.exits import exit_reason
 from deep_research.agent.llm import ModelFactory
 from deep_research.agent.nodes.check_citations import check_citations
+from deep_research.agent.nodes.check_claims import make_check_claims
 from deep_research.agent.nodes.decompose import make_decompose
 from deep_research.agent.nodes.gap_check import gap_check
 from deep_research.agent.nodes.intake import intake
@@ -133,6 +134,7 @@ def build_graph(
     builder.add_node("research_worker", make_research_worker(http_client, limiter, corpus))
     builder.add_node("gap_check", gap_check)
     builder.add_node("synthesize", make_synthesize(model_factory))
+    builder.add_node("check_claims", make_check_claims(model_factory))
     builder.add_node("check_citations", check_citations)
 
     builder.add_edge(START, "intake")
@@ -145,6 +147,10 @@ def build_graph(
     builder.add_conditional_edges(
         "gap_check", route_after_gap_check, ["decompose", "synthesize"]
     )
-    builder.add_edge("synthesize", "check_citations")
+    # check_claims runs BEFORE check_citations so `citations_checked` stays the last
+    # field any node writes. D-084 made it the terminal completion marker, and a node
+    # after it would mean a run reporting itself finished while work remained.
+    builder.add_edge("synthesize", "check_claims")
+    builder.add_edge("check_claims", "check_citations")
     builder.add_edge("check_citations", END)
     return builder.compile(checkpointer=checkpointer)

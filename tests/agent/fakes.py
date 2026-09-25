@@ -24,23 +24,50 @@ def plan_reply(*subtopics: str) -> str:
     return json.dumps({"subtopics": list(subtopics)})
 
 
+def claim_report(*unsupported: int, judged: int = 1) -> str:
+    """A claim-checker reply in the JSON shape ClaimReport expects (O-12, D-113).
+
+    `judged` claims, with the 1-based indices in `unsupported` marked false. Defaults to one
+    supported claim, which is what the default review produces: a single cited sentence.
+    """
+    return json.dumps(
+        {
+            "judgements": [
+                {
+                    "claim": index,
+                    "supported": index not in unsupported,
+                    "why": "the evidence does not state this" if index in unsupported else "",
+                }
+                for index in range(1, judged + 1)
+            ]
+        }
+    )
+
+
 # Two subtopics, so the default graph test actually fans out (D-067, D-069).
 DEFAULT_PLAN_REPLY = plan_reply("attention mechanisms", "positional encoding")
 
 
-def one_round_replies(review: str = DEFAULT_REPLY, plan: str = DEFAULT_PLAN_REPLY) -> list[str]:
+def one_round_replies(
+    review: str = DEFAULT_REPLY,
+    plan: str = DEFAULT_PLAN_REPLY,
+    claims: str | None = None,
+) -> list[str]:
     """Scripted replies for a run that does one search round and then stops.
 
     Milestone 4 calls decompose a **second** time after any productive round: gap_check sees
     new papers and routes back (D-075), and only then does the planner re-propose the same
     subtopics, which the explored filter drops -- leaving pending empty so route_subtopics
-    goes to synthesize (D-069). So the model is built three times: plan, plan, review.
+    goes to synthesize (D-069). Since D-113 a fourth model is built for the claim checker,
+    so the order is: plan, plan, review, claims.
 
     A test that scripts only [plan, review] gets the *review prose* handed to the second
-    decompose, which fails SubtopicPlan validation. That is what this helper exists to
-    prevent.
+    decompose, which fails SubtopicPlan validation -- and one that stops at [plan, plan,
+    review] hands that same prose to the claim checker, which then reports itself as having
+    failed rather than as having found nothing. Both are silent-looking failures, which is
+    what this helper exists to prevent.
     """
-    return [plan, plan, review]
+    return [plan, plan, review, claims if claims is not None else claim_report()]
 
 
 class NullLimiter:

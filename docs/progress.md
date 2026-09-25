@@ -20,6 +20,9 @@ Backed by `CLAUDE.md`, the output style, and `Edit(/tests/**)`, `Edit(/docs/**)`
 - [x] Deleted `nodes/search.py`, superseded by `research_worker`
 - [x] Re-ran the paid integration test against the milestone 4 graph — **1 passed** in 35.34s
 - [x] Committed milestone 4 as `f34d0d8`
+- [x] **O-12 settled -> D-113** — the claim checker: one node, one call, reading exactly
+      what the writer read. Verified live (it caught an invented "94.3% ROUGE-L"). A
+      product feature, not a thesis metric, so it stays out of `compare.py`
 - [ ] **Decide D-022's fate** — its per-subtopic overlap check is superseded for control flow by
       D-075; retire it, or keep the ratio as thesis evidence (see Open). **D-094 narrows this:**
       as a *novelty* signal it provably cannot fire, so the only live question is whether the

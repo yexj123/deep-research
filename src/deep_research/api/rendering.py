@@ -79,6 +79,27 @@ def render_coverage(coverage: Coverage) -> str:
             "they were last indexed are not represented.",
             "",
         ]
+    if coverage.unsupported_claims:
+        # First, because it is the strongest caveat the panel carries: the other entries say
+        # what the review did not cover, this one says part of what it *did* say may not be
+        # backed by the paper it credits.
+        lines += [
+            f"**{len(coverage.unsupported_claims)} claim(s) may not be supported by the "
+            "paper they cite.** A model checked each cited sentence against the text the "
+            "review was written from; these are the ones it could not verify. It is a "
+            "model judging a model, so treat it as a prompt to check rather than a verdict:",
+            "",
+        ]
+        lines += [f"- {claim}" for claim in coverage.unsupported_claims]
+        lines += [""]
+    elif not coverage.claims_checked:
+        # "Not checked" and "checked, found none" must not look identical (D-084).
+        lines += [
+            "**Claim support was not verified for this review.** The checker could not read "
+            "its own reply, so the citations are ID-verified but the sentences around them "
+            "are not.",
+            "",
+        ]
     if coverage.empty:
         lines += [
             "**No papers found for:** " + ", ".join(coverage.empty) + ".",

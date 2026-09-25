@@ -158,3 +158,46 @@ def test_a_run_with_no_local_answers_says_nothing_about_the_corpus() -> None:
         Coverage(explored=["a"], papers=30, rounds=1, stopped_because="the prompt was full")
     )
     assert "local corpus" not in html
+
+def test_unsupported_claims_lead_the_panel() -> None:
+    """The sharpest caveat the panel carries goes first (O-12, D-113).
+
+    Other entries say what the review did not cover; this one says part of what it *did* say
+    may not be backed by the paper it credits.
+    """
+    html = render_coverage(
+        Coverage(
+            explored=["a"],
+            papers=20,
+            rounds=1,
+            stopped_because="the prompt was full",
+            claims_checked=True,
+            unsupported_claims=["It reaches 2.1x [cites 2411.18583] -- evidence gives no number"],
+        )
+    )
+    assert "may not be supported" in html
+    assert "2.1x" in html
+    assert "model judging a model" in html, "the reader must know what produced this"
+    assert "<h2>Coverage and limitations</h2>" in html
+
+
+def test_an_unverified_review_says_so() -> None:
+    """"Not checked" and "checked, found none" must not look identical (D-084).
+
+    Without this, a checker that silently failed would leave a review looking fully verified.
+    """
+    html = render_coverage(
+        Coverage(explored=["a"], papers=20, rounds=1, stopped_because="the prompt was full",
+                 claims_checked=False)
+    )
+    assert "was not verified" in html
+
+
+def test_a_verified_clean_review_says_nothing_about_claims() -> None:
+    """No noise when there is nothing to report -- the panel stays about this run."""
+    html = render_coverage(
+        Coverage(explored=["a"], papers=20, rounds=1, stopped_because="the prompt was full",
+                 claims_checked=True)
+    )
+    assert "supported" not in html and "not verified" not in html
+    assert "<h2>Coverage</h2>" in html

@@ -4,10 +4,10 @@ START -> intake -> decompose -> (Send per subtopic) -> research_worker -> gap_ch
               ^                                                             |
               +------- depth left & new papers -------+                     |
                                           synthesize <----------------------+
-                                               -> check_citations -> END
+                                  -> check_claims -> check_citations -> END
 
-No network: `fake_factory` scripts the three model calls a one-round run makes (plan, plan,
-review -- see one_round_replies), `arxiv_ok` serves the saved 3-paper arXiv response, `limiter`
+No network: `fake_factory` scripts the four model calls a one-round run makes (plan, plan,
+review, claims -- see one_round_replies), `arxiv_ok` serves the saved 3-paper arXiv response, `limiter`
 is a zero-delay stand-in for the arXiv rate limiter, and `checkpointer` is a fresh InMemorySaver
 with the real serializer settings (see conftest.py).
 
@@ -111,6 +111,7 @@ async def test_updates_arrive_in_node_order(
         "gap_check",
         "decompose",
         "synthesize",
+        "check_claims",
         "check_citations",
     ]
 
@@ -270,7 +271,9 @@ async def test_provider_from_context_reaches_the_factory(
         context=RunContext(provider="deepseek"),
         version="v2",
     )
-    assert fake_factory.providers == ["deepseek"] * 3, "two decompose rounds plus synthesize"
+    assert fake_factory.providers == ["deepseek"] * 4, (
+        "two decompose rounds, synthesize, and the claim checker (D-113)"
+    )
 
 
 # ---- Input and context validation in intake (D-033) -------------------------------

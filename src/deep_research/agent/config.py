@@ -133,3 +133,14 @@ LOCAL_FIRST: bool = True
 # retrieval to abstracts, because selecting papers on text the model will never read measured
 # *worse* than not having full text at all (D-110).
 EXCERPT_MAX_CHARS: int = 0
+
+# How many cited sentences the claim checker judges in its single call (O-12, D-113).
+#
+# One call per run, not one per claim: a review cites ~8 papers across ~10 sentences, so
+# per-claim judging would be 10x the cost and latency for the same answer. The cap bounds the
+# prompt for a review that cites far more than usual -- a runaway review must not produce a
+# runaway checker call.
+#
+# 0 disables the checker entirely, which is the switchable baseline (D-091): the node still
+# runs and still reports, it simply judges nothing.
+MAX_CLAIMS_CHECKED: int = 25

@@ -2357,6 +2357,78 @@ inference D-079 itself warned about.
 **Not re-run per arm as a quality gate.** D-078 settled that asserting `citation_violations
 == []` asserts the *model* behaved; this is recorded, not enforced.
 
+### D-113 - The claim checker (settles O-12)
+
+`check_citations` verifies the **ID**. Measured across 140 runs, that guarantee held 1103
+times against 2 violations -- **0.18 per 100 citations** (D-112). ID validity is, empirically,
+not the risk. What remains is:
+
+> *"Smith et al. showed a 2.1x speedup [arXiv:1234.5678]"* -- the ID is real, the paper was
+> retrieved, the model was shown it, and the paper never says that.
+
+**One node, one call, after synthesize** (O-12's option A). Cited sentences are extracted,
+numbered, and judged in a single model call against the papers they cite.
+
+**Verified against a real model**, with one claim the abstract supports and one invented:
+
+> `The system achieves a 94.3% ROUGE-L score on PubMed abstracts [arXiv:2411.18583].`
+> -- flagged: *"No mention of ROUGE-L score or 94.3% in the evidence."*
+
+The supported claim passed. That is the entire feature working on its first live call.
+
+---
+
+**Five decisions, each of which had a wrong option that looked reasonable:**
+
+**1. It reads exactly what the writer read.** Evidence is `excerpt or summary` for the papers
+in `synthesized_from` -- the same text `format_papers` put in the synthesis prompt. D-110
+measured what a mismatch costs: retrieval selecting on full text while the model read
+abstracts dropped faithfulness **3.1 standard errors**. A checker judging different text would
+manufacture that defect in reverse, flagging supported claims because it read something else.
+
+**2. Failure is recorded, never fatal.** An unparseable judgement leaves
+`claims_checked = False` and a `claim_check_error`, and the run completes. This is the
+**inverse** of D-070: an unparseable *plan* means no research happened, so crashing is
+correct; an unparseable *judgement* means a finished, ID-verified review went unverified, and
+discarding it to report that would be a far worse trade.
+
+**3. "Not checked" and "checked, found none" are distinguishable.** Both would otherwise be an
+empty list -- the exact ambiguity D-084 removed for citations, reappearing one node later.
+
+**4. Citations to papers never shown are dropped, not judged.** `check_citations` already
+reports those. Judging them here would name one defect twice on the same sentence, and the
+second name would blame the writer for something the retriever did.
+
+**5. The evidence block carries D-097's nonce fence.** A checker is a *more* attractive
+injection target than a writer: text that talks its way past the thing verifying it defeats
+the verification, not merely the prose.
+
+---
+
+**It runs before `check_citations`, not after.** D-084 made `citations_checked` the terminal
+completion marker; a node after it would mean a run reporting itself finished while work
+remained. Ordering is free here, so the marker keeps its meaning.
+
+**A node on the terminal path costs a super-step.** The measured minimum `recursion_limit`
+moved from 13 to 14, so `RECURSION_LIMIT = 15` now carries **one** step of headroom rather
+than two. `test_recursion.py` is the only thing that noticed -- the constant itself did not
+change, so nothing else would have.
+
+**Reported first in the coverage panel**, ahead of the other entries: they say what the review
+did not cover; this says part of what it *did* say may not be backed by the paper it credits.
+The wording tells the reader it is a model judging a model, and to treat it as a prompt to
+check rather than a verdict.
+
+**This is a product feature, not a thesis metric.** `unsupported_claims` is produced by the
+same system being evaluated, so quoting it as a quality number is self-assessment. O-11's
+independent judge is what the thesis reports; this is what the reader sees. It is therefore
+**not** added to `compare.py` or `results.json`.
+
+**Cost:** one extra model call per run, and a fourth streaming node. `api/routes/runs.py`
+filters the `messages` stream with an **allowlist** (only `synthesize` passes), which is why
+adding it was safe -- a denylist naming the known non-review nodes would have leaked its JSON
+into the user's review the day it landed.
+
 ## Open (proposed, not decided)
 
 **Settled 2026-09-20:** O-1 → D-064, O-2 → D-065, O-3 → D-066.
@@ -2914,7 +2986,7 @@ return nothing.
 | O-9 | Accent spellings | Measure recall first, then decide | Any time |
 | O-10 | Non-English stopwords | Accept and document | Any time |
 | ~~O-11~~ | Evaluation harness | **Settled → D-088** | ~~before O-13~~ |
-| **O-12** | **In-band claim checker** | One node, one call; a product feature, not a thesis metric | After O-13 |
+| ~~O-12~~ | ~~In-band claim checker~~ | **Settled -> D-113.** One node, one call, reading exactly what the writer read; failure recorded, never fatal | ~~After O-13~~ |
 | ~~O-15~~ | ~~Stop reason invisible on a clean run~~ | **Settled → D-099** | ~~Before a demo~~ |
 | **O-16** | **A covered topic never refreshes** | Report only (D-105) until a measured max age exists; the experiment needs time to pass, not compute | When the corpus is months old |
 | ~~O-13~~ | ~~Local-first corpus, BM25 first~~ | **Settled.** The corpus pays (D-107: 65 arXiv requests to 1, -65% wall clock, quality flat). Full text does not (D-111: 2.8x the prompt, nothing past 2 SE) | ~~Milestone 6~~ |
