@@ -84,6 +84,11 @@ You're the architect and reviewer, not the typist.
   don't cache-and-redistribute — most papers don't permit it.
 - No Google Scholar scraping, anywhere, ever.
 
+*(The Semantic Scholar clauses stand as licensing rules but are moot in practice: D-124
+settled that retrieval is arXiv-only, and S2 no longer issues API keys to third-party apps.
+The legal position here is unchanged — this is a note about reachability, not a
+re-litigation.)*
+
 ## Architecture
 
 **Agent (LangGraph)** — the research/recursion logic itself:

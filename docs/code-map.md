@@ -506,6 +506,15 @@ node name `"synthesize"` when `pending_subtopics` is empty, and `Send` objects o
 Node names are part of the streaming contract: they appear as `metadata["langgraph_node"]` and as
 `updates` keys (see `langgraph-outputs.md`).
 
+### `agent/sources/__init__.py` [D-124]
+**Defines:** nothing — deliberately. It holds a docstring saying **this is a package, not an
+interface**: there is no `Source` Protocol and no base class, because `arxiv_id` is the corpus
+primary key and `[arXiv:<id>]` is the citation contract (D-046). Adding a non-arXiv source is a
+primary-key migration, not a second implementation.
+**Why the docstring is the deliverable:** the file's *emptiness* was the bug. For weeks the
+README and the task list both claimed a second source was "designed for but not built", and an
+empty file contradicted nothing.
+
 ### `agent/sources/models.py` [M2]
 **Defines:**
 - `ARXIV_ID_PATTERN`;

@@ -1,4 +1,5 @@
 ---
+name: langgraph-conventions
 description: This project's LangGraph implementation patterns — state schema shape, node template, Send fan-out template, recursion-depth guard, checkpointing. Load when writing or reviewing a node, edge, or the state schema.
 ---
 
@@ -8,7 +9,7 @@ description: This project's LangGraph implementation patterns — state schema s
 
 - **Decided**: Pydantic at the boundaries, dataclasses inside. The top-level
   graph state is a dataclass. Anything arriving from outside the process
-  (LLM structured output, arXiv/Semantic Scholar responses) is a Pydantic
+  (LLM structured output, arXiv responses) is a Pydantic
   model, validated explicitly with `Model.model_validate(...)` in the node
   that receives it. Reason: when the state itself is Pydantic, LangGraph only
   validates the input to the *first* node, so validation has to happen at

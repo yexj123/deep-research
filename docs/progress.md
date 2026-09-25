@@ -4,7 +4,8 @@ What's done, what's next, and whose job each item is. Design reasoning
 lives in [`decisions.md`](decisions.md); this file only tracks status.
 
 **Last updated:** 2026-09-25 · **Current milestone:** 6 done (corpus, adaptive exits, claim
-checker); multi-turn sessions shipped (D-121, D-122); next is Semantic Scholar, then O-16
+checker); multi-turn sessions shipped (D-121, D-122); arXiv-only settled (D-124). Remaining
+open work is blocked on time (O-16) or unexplained (D-070), not on effort
 
 **Who writes what:** you write the implementation (`src/`); Claude writes every test
 (since 2026-09-19) and keeps the docs (since 2026-09-20) — `docs/*.md` and the README.
@@ -20,15 +21,13 @@ Backed by `CLAUDE.md`, the output style, and `Edit(/tests/**)`, `Edit(/docs/**)`
       `- `. Measured over the 140 recordings: **1 claim in 9 was a merged block** (102 of 921),
       3.0 blocks each and up to 10; the fix recovers 208 claims, **23% more checked per
       review**, with nothing near the cap of 25. Verified live
-- [ ] **Decide O-17 — a second source.** Investigated 2026-09-25; **both halves of the original
-      task description were wrong.** Semantic Scholar no longer approves keys for third-party
-      apps or free email domains, and its unauthenticated tier returned **429 on 3 of 3**
-      requests. And `sources/` is not an abstraction to test: `__init__.py` is empty and
-      `arxiv_id` is the corpus **primary key**, 73 uses across 9 files. OpenAlex is open and
-      CC0, but **69% of its results carry no arXiv ID** (75/240 over 12 real subtopics), so
-      adopting it means changing what a paper *is*. **Recommendation: stay arXiv-only and
-      delete the "pluggable sources" claim**, until an A/B shows non-arXiv papers improve a
-      review. Your call — see O-17
+- [x] **O-17 settled → D-124 — arXiv only, as a decision rather than a gap.** Both halves of
+      the original task description were wrong: Semantic Scholar no longer approves keys for
+      third-party apps or free email domains (**429 on 3 of 3** unauthenticated), and
+      `sources/` is not an abstraction to test — `__init__.py` is empty and `arxiv_id` is the
+      corpus **primary key**, 73 uses across 9 files. OpenAlex is open and CC0 but **69% of
+      its results carry no arXiv ID** (75/240 over 12 real subtopics). The claim is deleted,
+      the capability is not built, and an A/B through the existing harness would reopen it
 - [ ] **D-070: the planner repair-retry is still open** (D-120). Re-measured on the *second-round*
       prompt (the one carrying the explored list, which D-119 missed): **1 fenced reply in 120**.
       So D-117's fix does prevent a real failure — but pooled 1/240 = 0.42% still excludes

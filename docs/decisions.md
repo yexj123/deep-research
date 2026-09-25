@@ -623,7 +623,8 @@ and what was rejected. It's the answer to "why did you do it this way?"
   means *we* sent something wrong.
 - **Rejected:** an explicit status map (`{429, 5xx}` retry, `{400, 404}` crash, else crash). More
   precise and easier to test per status, but a table to maintain while there is still only one
-  source. Revisit when a second source lands.
+  source. ~~Revisit when a second source lands.~~ **D-124 settled that there is not going to be
+  one** unless an experiment reopens it, so this rejection is now permanent rather than pending.
 - **Known consequence:** `ArxivAPIError` remains unreachable through `search_arxiv`, since arXiv's
   error feed arrives with a 400 that `raise_for_status()` catches first. It is exercised only by
   tests calling `parse_feed` directly. Whether to raise it *before* `raise_for_status()`, so arXiv's
@@ -2889,7 +2890,53 @@ review in `test_check_claims.py` was prose, because the tests were written from 
 not from real model output. The rule was tested thoroughly against the inputs it was designed
 for. `tests/eval/claim_split.py` now measures the real ones.
 
+### D-124 - arXiv only, as a decision rather than a gap (settles O-17)
+
+**Decision, confirmed 2026-09-25:** this agent retrieves from arXiv, and that is a choice with
+evidence behind it, not a missing feature. The *claim* that a second source was designed for
+gets deleted; the capability is not built, and will not be until an experiment says it pays.
+
+The full investigation is O-17 below, kept verbatim because the evidence is the point. The
+three facts that decided it:
+
+| | |
+|---|---|
+| Semantic Scholar | No keys for third-party apps or free email domains — this repo is both (D-002). Unauthenticated: **429 on 3 of 3** requests |
+| `sources/` | Not an abstraction. `__init__.py` **empty**, no Protocol; `arxiv_id` is the corpus **primary key**, 73 uses across 9 files |
+| OpenAlex | Open and CC0, but **69%** of its results carry no arXiv ID (75/240 over 12 real subtopics) |
+
+**Why not generalise anyway.** `Source.arxiv_id` is the corpus primary key and `[arXiv:<id>]`
+is the citation contract the entire grounding design rests on (D-046). Changing both is a
+primary-key migration plus a change to the one invariant this project is built around — and
+**nothing has measured that non-arXiv literature makes a review better.** The last four
+features that sounded obviously good were each built, measured, and each failed: recursion
+(D-094), depth (D-095), full text (D-111), and O-13's specified sufficiency test (D-104).
+Spending that migration on an unmeasured premise would be the fifth.
+
+**This is not "we ran out of time".** arXiv is the right corpus for a CS/ML thesis tool, its
+API needs no key and no application, and D-105's local-first tier already turned 65 requests
+into 1. A single well-matched source that the citation checker can verify end to end is worth
+more here than two sources with a weakened identity contract.
+
+**What would reopen it, and it is cheap:** run the frozen question set with arXiv as today
+against arXiv plus OpenAlex's non-arXiv results, and score both through the existing harness
+(O-11, D-088). If faithfulness or specificity moves, the migration is justified and the
+namespaced-ID form (`"arxiv:2411.18583"`, `"doi:10.1145/…"`) is the one to take — one field,
+one regex, and the migration is a prefix update rather than a schema change. The citation
+marker must be **extended** rather than replaced, or the 140 committed recordings become
+unscoreable. `tests/eval/openalex_fit.py` is the first half of that experiment already.
+
+**Recorded as a reasoning error, because it was mine:** the task description said "the
+`sources/` package was designed for it and has only ever had one implementation, so the
+abstraction is untested." Both clauses were false, and neither needed an experiment to check —
+`__init__.py` is empty and `grep arxiv_id` returns 73 hits. Two minutes of reading would have
+found what a week of building would have discovered painfully. **Read the code before
+planning work on it**, which is the same lesson as D-104's unchecked sufficiency test and
+D-119's untested prompt.
+
 ## Open (proposed, not decided)
+
+- **~~O-17~~ — settled → D-124.** Kept below for the evidence; the decision is above.
 
 - **O-17 — a second source: Semantic Scholar is closed, and `sources/` is not an abstraction.**
   Opened 2026-09-25, from the step "Semantic Scholar as a second source — the `sources/`
@@ -2942,7 +2989,8 @@ for. `tests/eval/claim_split.py` now measures the real ones.
   | **B. OpenAlex as discovery, keep only arXiv-identifiable results** | No change to `Source`, the corpus PK, the citation marker or any recording. Days, not weeks | Throws away **69%** of results, i.e. uses a weaker search to find arXiv papers arXiv indexes better. Hard to justify |
   | **C. Generalise identity** — `Source.paper_id` + a `source` discriminator, or one namespaced string (`"arxiv:2411.18583"`, `"doi:10.1145/…"`) | The only option that actually adds non-arXiv literature, which is the point | Touches all 73 sites, needs a corpus migration on a **primary key**, changes the synthesis prompt and both citation regexes. The 140 committed recordings stay readable **only if the marker is extended rather than replaced** — `[arXiv:…]` must keep matching, or every arm becomes unscoreable |
 
-  **Recommendation: A for now, and delete the claim rather than the capability.** Not because
+  **Recommendation: A for now, and delete the claim rather than the capability.**
+  **Confirmed 2026-09-25 → D-124.** Not because
   C is wrong, but because nothing has measured that non-arXiv literature would *improve a
   review* — and this project's last four features that sounded obviously good (recursion,
   depth, full text, the specified sufficiency test) were each measured and each failed
@@ -3517,6 +3565,6 @@ return nothing.
 | ~~O-12~~ | ~~In-band claim checker~~ | **Settled -> D-113.** One node, one call, reading exactly what the writer read; failure recorded, never fatal | ~~After O-13~~ |
 | ~~O-15~~ | ~~Stop reason invisible on a clean run~~ | **Settled → D-099** | ~~Before a demo~~ |
 | **O-16** | **A covered topic never refreshes** | Report only (D-105) until a measured max age exists; the experiment needs time to pass, not compute | When the corpus is months old |
-| **O-17** | **A second source** | Semantic Scholar is closed to third-party apps and 429s unauthenticated; `sources/` is not an abstraction (`__init__.py` is empty, `arxiv_id` is the corpus PK). OpenAlex is open and CC0 but **69% of its results have no arXiv ID**. Recommend staying arXiv-only and deleting the "pluggable sources" claim, until an A/B shows non-arXiv papers improve a review | Before claiming the design is source-agnostic |
+| ~~O-17~~ | ~~A second source~~ | **Settled → D-124.** arXiv only, as a decision: S2 is closed to third-party apps, `sources/` is not an abstraction (`__init__.py` empty, `arxiv_id` is the corpus PK), and **69% of OpenAlex results have no arXiv ID**. Reopens if an A/B shows non-arXiv papers improve a review | ~~Before claiming the design is source-agnostic~~ |
 | ~~O-13~~ | ~~Local-first corpus, BM25 first~~ | **Settled.** The corpus pays (D-107: 65 arXiv requests to 1, -65% wall clock, quality flat). Full text does not (D-111: 2.8x the prompt, nothing past 2 SE) | ~~Milestone 6~~ |
 | ~~O-14~~ | ~~`MAX_DEPTH` default + a yield-based exit~~ | **Settled → D-096.** Adaptive exits instead of a lower ceiling: −66% searches, quality flat, 19/20 runs stop after one round | ~~Now~~ |
