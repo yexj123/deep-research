@@ -33,8 +33,11 @@ Backed by `CLAUDE.md`, the output style, and `Edit(/tests/**)`, `Edit(/docs/**)`
       So D-117's fix does prevent a real failure — but pooled 1/240 = 0.42% still excludes
       D-089's implied ~3%, and most runs now make only one planner call at all (D-096). The
       1-in-10 remains unexplained
-- [ ] **O-16: a covered topic never refreshes.** Needs *time to pass*, not compute — re-record
-      a covered question against a corpus seeded weeks earlier. Report-only until then (D-105)
+- [ ] **O-16: run the staleness experiment — not before ~2026-11-01.** The corpus was seeded
+      **2026-09-25** and the clock is running; everything that could be done early is done.
+      Two paid record passes, then `compare`. **Do not re-run `seed_corpus` without
+      `--rebuild`** — it would re-fetch and stamp today, destroying the one property the
+      experiment depends on. Full protocol: `docs/staleness-experiment.md`
 - [ ] *(Optional)* Delete the old 55 MB uv cache on C::
       `uv cache clean --cache-dir "$env:LOCALAPPDATA\uv\cache"`
 - [x] Fixed the four truncated comments in `state.py`
@@ -147,6 +150,30 @@ through a heading into a numbered list: four paragraphs, six citations, one bool
 over the recordings, **1 claim in 9 was a merged block**, and the fix checks 23% more claims
 per review. The suite could not have caught it — every fixture review was prose, because the
 tests were written from the rule rather than from real model output.
+
+## O-16's clock started — the dated corpus is seeded (2026-09-25)
+
+The staleness experiment needs *time to pass*, not compute, and the months-old corpus cannot
+be manufactured afterwards: `index_sources` stamps `indexed_at = now` with no override, so a
+corpus built in November is a November corpus whatever is in it. Seeding it now was free —
+`search_arxiv` plus `index_sources`, **no model call**.
+
+**1554 papers across 10 frozen questions, split by measured arXiv velocity** — a fast arm at
+51–280 submissions in the prior 30 days and a slow control arm at 0–30, with `hmm-speech` and
+`crf-tagging` at **exactly zero**. The slow arm is the negative control: a STALE-vs-FRESH
+difference could come from age *or* from corpus-vs-arXiv retrieval, and only a topic that
+gained no papers separates them.
+
+The committed artifact is the **manifest**, not the database (`*.sqlite` is gitignored, D-010).
+`seed_corpus.py --rebuild` restores it offline with the original `indexed_at`, so a machine
+wipe loses nothing.
+
+**Checked today rather than in November**, when it would be too late to re-seed at the right
+date: every paper carries the seed date, and **20 of 20 held-out subtopics** — written after
+seeding, sharing no wording with any seed query — clear `MIN_LOCAL_PAPERS`. Asking whether the
+*seeded* queries hit would have proved nothing.
+
+Protocol: `docs/staleness-experiment.md`.
 
 ## /demo-check, 2026-09-25 — passed, after fixing what it found
 

@@ -3547,6 +3547,47 @@ return nothing.
   months earlier and compare specificity and citation recency. That is genuinely future work,
   and saying so is better than shipping a guessed N.
 
+  **Seeded 2026-09-25. The clock is now running.** The half of this that could be done early
+  was done: the "months-old corpus" cannot be manufactured later, because `index_sources`
+  stamps `indexed_at = now` and takes no override, so a corpus built in November is a November
+  corpus whatever is in it. Seeding it was free — `search_arxiv` plus `index_sources`, **no
+  model call at all**.
+
+  What now exists, with the full protocol in [`staleness-experiment.md`](staleness-experiment.md):
+
+  - `tests/eval/questions-staleness.json` — 10 frozen questions, **split by measured arXiv
+    velocity** (`tests/eval/velocity.py`): a fast arm at 51–280 submissions in the prior 30
+    days, and a slow control arm at 0–30. `hmm-speech` and `crf-tagging` had **exactly zero**.
+    Measuring staleness only on mature topics would have been underpowered by construction —
+    D-095's mistake pointed the other way.
+  - `tests/eval/snapshots/corpus-seed.json` — the committed manifest, 1554 distinct papers.
+    The `.sqlite` is gitignored (D-010), so the manifest is the artifact and
+    `seed_corpus.py --rebuild` restores the database **with the original `indexed_at`**, no
+    network. The date is therefore *asserted by the manifest* rather than observed by the
+    database — committed and dated in git, which is a stronger record than a file's mtime,
+    but not the same claim.
+  - `EVAL_STALE_CORPUS=1` on the recorder, reaching `retrieval_unit` so the arm is named
+    `staleness-abstract-stale-…`. Without that a stale run would file under `abstract-local`
+    beside fresh-corpus recordings — the D-094 mislabelling that `arm_name` exists to prevent.
+
+  **The slow arm is the negative control**, and it is why this is worth more than a
+  before/after: a STALE-vs-FRESH difference could come from *age* or from *corpus-vs-arXiv
+  retrieval*, and only a topic that gained no papers separates them. That is the negative
+  population D-104's first sufficiency experiment lacked, built in from the start this time.
+
+  **The primary metric is free and needs no judge:** count the papers the fresh arm cites that
+  were published after the seed date. Those could not have been in the snapshot — the
+  manifest's per-question `newest_published` makes it a fact rather than an inference. The
+  judged quality metrics are secondary, because at n=10 this harness has returned honest nulls
+  on real retrieval differences twice (D-094, D-095). A large recency gap with a quality null
+  would itself be the answer: *the review does not get worse, it just gets older.*
+
+  **Verified today, so the experiment is not discovered to be impossible in November:**
+  `tests/eval/seed_check.py` confirms every paper carries the seed date, and that **20 of 20
+  held-out subtopics** — plausible planner output, deliberately sharing no wording with any
+  seed query — clear `MIN_LOCAL_PAPERS`. The circular check (do the seeded queries hit?) would
+  have proved nothing.
+
 ### Summary
 
 | # | Item | Recommendation | Needed by |
@@ -3564,7 +3605,7 @@ return nothing.
 | ~~O-11~~ | Evaluation harness | **Settled → D-088** | ~~before O-13~~ |
 | ~~O-12~~ | ~~In-band claim checker~~ | **Settled -> D-113.** One node, one call, reading exactly what the writer read; failure recorded, never fatal | ~~After O-13~~ |
 | ~~O-15~~ | ~~Stop reason invisible on a clean run~~ | **Settled → D-099** | ~~Before a demo~~ |
-| **O-16** | **A covered topic never refreshes** | Report only (D-105) until a measured max age exists; the experiment needs time to pass, not compute | When the corpus is months old |
+| **O-16** | **A covered topic never refreshes** | Report only (D-105) until a measured max age exists. **Corpus seeded 2026-09-25 — the clock is running**; protocol in `staleness-experiment.md` | Runnable from ~2026-11-01 |
 | ~~O-17~~ | ~~A second source~~ | **Settled → D-124.** arXiv only, as a decision: S2 is closed to third-party apps, `sources/` is not an abstraction (`__init__.py` empty, `arxiv_id` is the corpus PK), and **69% of OpenAlex results have no arXiv ID**. Reopens if an A/B shows non-arXiv papers improve a review | ~~Before claiming the design is source-agnostic~~ |
 | ~~O-13~~ | ~~Local-first corpus, BM25 first~~ | **Settled.** The corpus pays (D-107: 65 arXiv requests to 1, -65% wall clock, quality flat). Full text does not (D-111: 2.8x the prompt, nothing past 2 SE) | ~~Milestone 6~~ |
 | ~~O-14~~ | ~~`MAX_DEPTH` default + a yield-based exit~~ | **Settled → D-096.** Adaptive exits instead of a lower ceiling: −66% searches, quality flat, 19/20 runs stop after one round | ~~Now~~ |

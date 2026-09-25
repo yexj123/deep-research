@@ -1,0 +1,82 @@
+{
+  "version": 1,
+  "set": "staleness",
+  "seeded_at": "2026-09-25",
+  "note": "Frozen evaluation set, append-only on the same terms as questions.json: add questions, never reword one, because a reworded question silently invalidates every earlier recording that used it (D-088).",
+  "why": "O-16 asks what a corpus costs once it stops refreshing. That effect can only appear where new papers actually arrive, so the set is split into a fast arm and a slow control arm, chosen by MEASURED arXiv submissions in the 30 days to 2026-09-25 (tests/eval/velocity.py). Testing staleness only on mature topics would be underpowered by construction -- D-095's mistake, pointed the other way.",
+  "falsifies": "If the fast arm shows no quality or recency difference after months of drift, staleness is not a real cost on this workload and O-16 closes as 'report only' permanently rather than provisionally. If the SLOW arm shows a difference, the measurement is broken, not the corpus: those topics gained ~0 papers.",
+  "protocol": "See docs/staleness-experiment.md. The comparison runs in the FUTURE against the corpus seeded today; nothing is recorded now.",
+  "velocity_note": "submissions matching the topic terms in the 30 days to 2026-09-25, from arXiv's own opensearch:totalResults. Recorded so the arm split can be defended later without re-measuring, and so drift in these numbers is itself visible.",
+  "questions": [
+    {
+      "id": "rag-halluc",
+      "arm": "fast",
+      "velocity_30d": 280,
+      "question": "How does retrieval-augmented generation reduce hallucination in language models?",
+      "facets": ["retrieval augmented generation hallucination", "grounding language model outputs in retrieved documents", "retrieval quality and answer faithfulness"]
+    },
+    {
+      "id": "agent-tools",
+      "arm": "fast",
+      "velocity_30d": 178,
+      "question": "How do language model agents decide which tools to call?",
+      "facets": ["LLM agent tool selection", "function calling in language models", "tool use planning and error recovery"]
+    },
+    {
+      "id": "diffusion-lm",
+      "arm": "fast",
+      "velocity_30d": 139,
+      "question": "How do diffusion models generate text rather than images?",
+      "facets": ["diffusion language models text generation", "discrete diffusion for sequences", "masked diffusion decoding"]
+    },
+    {
+      "id": "moe-routing",
+      "arm": "fast",
+      "velocity_30d": 73,
+      "question": "How do mixture-of-experts architectures route tokens to experts?",
+      "facets": ["mixture of experts routing", "expert load balancing sparse models", "router training instability"]
+    },
+    {
+      "id": "test-time",
+      "arm": "fast",
+      "velocity_30d": 71,
+      "question": "How does spending more compute at inference time improve model reasoning?",
+      "facets": ["test time compute scaling", "inference time search reasoning", "chain of thought sampling budget"]
+    },
+    {
+      "id": "stale-spec",
+      "arm": "fast",
+      "velocity_30d": 51,
+      "question": "How does speculative decoding speed up language model inference?",
+      "facets": ["speculative decoding draft model", "tree based speculative verification", "draft acceptance rate"]
+    },
+    {
+      "id": "pca-dim",
+      "arm": "slow",
+      "velocity_30d": 30,
+      "question": "How is principal component analysis used for dimensionality reduction?",
+      "facets": ["principal component analysis dimensionality reduction", "eigenvalue decomposition covariance", "PCA variance explained"]
+    },
+    {
+      "id": "svm-kernel",
+      "arm": "slow",
+      "velocity_30d": 6,
+      "question": "How do kernel methods let support vector machines separate non-linear data?",
+      "facets": ["support vector machine kernel trick", "radial basis function classifier", "margin maximization"]
+    },
+    {
+      "id": "hmm-speech",
+      "arm": "slow",
+      "velocity_30d": 0,
+      "question": "How were hidden Markov models used for speech recognition?",
+      "facets": ["hidden markov model speech recognition", "viterbi decoding acoustic model", "gaussian mixture emission"]
+    },
+    {
+      "id": "crf-tagging",
+      "arm": "slow",
+      "velocity_30d": 0,
+      "question": "How do conditional random fields model sequence labeling?",
+      "facets": ["conditional random fields sequence labeling", "structured prediction tagging", "linear chain CRF inference"]
+    }
+  ]
+}

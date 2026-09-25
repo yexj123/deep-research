@@ -28,6 +28,10 @@ QUESTIONS_FILE = Path(__file__).parent / "questions.json"
 QUESTION_SETS = {
     "broad": QUESTIONS_FILE,
     "narrow": Path(__file__).parent / "questions-narrow.json",
+    # O-16's staleness set, split into a fast arm and a slow control by measured arXiv
+    # velocity. Nothing is recorded against it until the seeded corpus is genuinely old --
+    # see docs/staleness-experiment.md.
+    "staleness": Path(__file__).parent / "questions-staleness.json",
 }
 DEFAULT_QUESTION_SET = "broad"
 

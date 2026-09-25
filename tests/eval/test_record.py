@@ -117,6 +117,15 @@ _CORPUS: sqlite3.Connection | None = None
 # code is identical, which is what makes the two arms differ by one thing (D-088).
 EVAL_FULL_TEXT = os.environ.get("EVAL_FULL_TEXT", "") not in ("", "0", "false")
 
+# EVAL_STALE_CORPUS=1 records O-16's stale arm: retrieval reads the corpus snapshot seeded on
+# a known past date (tests/eval/snapshots/), so the run can only cite papers that existed
+# then. Again the corpus *contents* are the only variable.
+#
+# It must reach `retrieval_unit` below, or a stale run would be filed under `abstract-local`
+# alongside recordings made from a fresh corpus -- two different experiments under one arm
+# name, which is the D-094 mislabelling that `arm_name` exists to make impossible.
+EVAL_STALE_CORPUS = os.environ.get("EVAL_STALE_CORPUS", "") not in ("", "0", "false")
+
 
 def _eval_corpus() -> sqlite3.Connection | None:
     """The seeded corpus, or None when the arm does not use one.
@@ -131,7 +140,21 @@ def _eval_corpus() -> sqlite3.Connection | None:
     if _CORPUS is None:
         from tests.eval.corpus_coverage import all_recorded_papers
 
-        if EVAL_FULL_TEXT:
+        if EVAL_STALE_CORPUS:
+            # O-16's stale arm. A file, not an in-memory rebuild, because its value is its
+            # `indexed_at` dates -- rebuilding would stamp today and destroy the one property
+            # the experiment depends on. `--rebuild` restores it from the committed manifest
+            # with the original dates if the file is ever lost.
+            from deep_research.persistence.corpus import connect
+            from tests.eval.seed_corpus import SNAPSHOT_DB
+
+            if not SNAPSHOT_DB.exists():
+                raise RuntimeError(
+                    f"{SNAPSHOT_DB} does not exist. Restore it from the committed manifest"
+                    " with: uv run python -m tests.eval.seed_corpus --rebuild"
+                )
+            _CORPUS = connect(str(SNAPSHOT_DB))
+        elif EVAL_FULL_TEXT:
             from tests.eval.enrich import CORPUS_PATH
             from deep_research.persistence.corpus import connect
 
@@ -171,7 +194,13 @@ def _settings() -> dict[str, object]:
         # D-105's corpus-first path; "full_text" comes later. Reusing this key rather than
         # adding a dimension keeps the 80 committed arm names stable (D-088).
         "retrieval_unit": (
-            ("fulltext-local" if EVAL_FULL_TEXT else "abstract-local")
+            (
+                "abstract-stale"
+                if EVAL_STALE_CORPUS
+                else "fulltext-local"
+                if EVAL_FULL_TEXT
+                else "abstract-local"
+            )
             if EVAL_LOCAL_FIRST
             else "abstract"
         ),
