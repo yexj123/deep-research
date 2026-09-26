@@ -2936,6 +2936,11 @@ D-119's untested prompt.
 
 ### D-125 - The user types the model, and a broken corpus says so
 
+> **The model half's *interface* is revised by D-126**: the absent sentinel is `None` rather
+> than `""`, the control is a dropdown plus a "Custom…" field rather than one free-text input,
+> and the option list lives in `config.py` rather than the template. The capability, the
+> validation, the storage and the `failed` event below all stand.
+
 Two changes that share a theme: **the app should not decide things for the user silently.**
 
 ---
@@ -3007,6 +3012,65 @@ enough to explain itself*, `error` means the connection dropped and it did not.
 - *Keeping the model in `config.py` only* — the status quo, which makes trying a cheaper model
   a code edit and a restart.
 - *Re-reading the model from config on resume* — silently changes the model mid-run.
+
+### D-126 - The model picker's interface, specified (revises D-125)
+
+D-125 shipped the capability; **I chose its interface, and it was not confirmed.** Specified
+afterwards, three parts of it change. The capability, the validation, the storage and the
+`failed` event all stand.
+
+| | D-125 (mine) | D-126 (specified) |
+|---|---|---|
+| absent sentinel | `""` | **`None`** |
+| UI control | one text input + `<datalist>` | **`<select>` + a "Custom…" option revealing a text field** |
+| option list | hardcoded in the template | **`RECOMMENDED_MODELS` in `config.py`, rendered by the server** |
+
+**`None` over `""`.** "The user did not choose" and "the user chose the empty string" are
+different facts, and only one of them is reachable — a sentinel that cannot be produced by
+accident is worth more than one that can. The three blank forms (`None`, `""`, `"   "`) are
+collapsed once, at the API boundary, so nothing downstream has to tell them apart.
+
+**One place where `""` survives, deliberately:** the SQLite column is `TEXT NOT NULL DEFAULT
+''`, shipped that way by D-125's migration. Making it nullable would mean rebuilding the table
+for no behavioural gain, so the two representations meet in `_run_from_row` — the single
+function every query now goes through, which also removes four duplicated `Run(*row)`
+constructions that could have drifted.
+
+**A dropdown *and* a custom field, not one or the other.** My datalist technically allowed
+both, but its suggestions are invisible until you focus and type, so in practice it read as a
+free-text box and the common models were undiscoverable. A `<select>` shows them; "Custom…"
+keeps the escape hatch that makes the list a *suggestion* rather than a whitelist. Nothing
+validates against `RECOMMENDED_MODELS` — a model released tomorrow must work by typing it,
+which is the entire point.
+
+**The list lives in `config.py`, not the template.** Adding a model is a one-line config
+change, and the server stays the single source of truth for what the page offers. Each option
+carries `data-provider`, so the browser filters by provider without a second copy of the list
+in JavaScript. Switching provider while a now-hidden model is selected falls back to that
+provider's default rather than submitting a model it does not serve.
+
+Two tests exist only to catch the list contradicting itself, since both halves live in the
+same file and nothing otherwise compares them: every recommended model must pass
+`MODEL_NAME_PATTERN`, and every provider's default must appear in its own dropdown.
+
+**Verified in a real browser**, because all of this is JavaScript: OpenAI shows 5 + Custom,
+switching to DeepSeek re-filters and re-selects `deepseek-flash`, "Custom…" reveals the field,
+`"  gpt-4.1-nano  "` submits as `"gpt-4.1-nano"`, a blank custom field submits as `null`, and
+a full run on a typed `gpt-4o-mini` finished with 0 citation violations and 0 console errors.
+
+---
+
+**Two UI bugs found by looking at that run, neither related to the model** (O-5):
+
+- **`check_claims` had no label.** It shipped as a node in D-113 and `NODE_LABELS` was never
+  updated, so the progress trail showed the reader the literal string `check_claims`. No test
+  covered it; the list is now derived from the compiled graph, so the *next* node added fails
+  a test instead of reaching a user.
+- **`research_worker` was labelled "Searching arXiv".** Since local-first (D-105) a worker
+  often answers entirely from the corpus — and the `progress` events directly beneath it said
+  so by name, while the label above claimed a search that never happened. **This is D-118
+  exactly**, fixed in the worker at the time and left standing in the UI. Now "Researching a
+  subtopic", with the specifics left to the events that know them.
 
 ## Open (proposed, not decided)
 

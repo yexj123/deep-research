@@ -61,7 +61,7 @@ SYSTEM_PROMPT = (
     "explanation."
 )
 
-Rewriter = Callable[[str, str, str, ProviderType, str], Awaitable[str]]
+Rewriter = Callable[[str, str, str, ProviderType, str | None], Awaitable[str]]
 
 
 def needs_context(question: str) -> bool:
@@ -82,7 +82,7 @@ def make_rewriter(model_factory: ModelFactory) -> Rewriter:
         parent_question: str,
         parent_review: str,
         provider: ProviderType,
-        model: str = "",
+        model: str | None = None,
     ) -> str:
         """The follow-up as a standalone question, or unchanged if it already is one.
 

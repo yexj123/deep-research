@@ -19,17 +19,17 @@ from deep_research.agent.context import ProviderType
 # Anything with this signature can be passed to build_graph(). Production passes
 # get_chat_model; tests pass a factory that returns GenericFakeChatModel.
 #
-# `model` is the user's typed override (D-125) and is second because it is optional: every
+# `model` is the user's override (D-125, D-126) and is second because it is optional: every
 # caller already had a provider, and defaulting it keeps "just use the configured model" a
 # one-argument call.
-ModelFactory = Callable[[ProviderType, str], BaseChatModel]
+ModelFactory = Callable[[ProviderType, str | None], BaseChatModel]
 
 
-def get_chat_model(provider: ProviderType, model: str = "") -> BaseChatModel:
+def get_chat_model(provider: ProviderType, model: str | None = None) -> BaseChatModel:
     """Return a configured chat model for `provider`, failing loudly if it can't be built.
 
-    `model` overrides the provider's configured default (D-125). Empty means "use the default",
-    which is what every run did before the override existed.
+    `model` overrides the provider's configured default (D-125). `None` means "use the
+    default", which is what every run did before the override existed.
 
     **Whether the name is real is the provider's call, not ours.** A typo reaches the API and
     comes back as that provider's own 404, which names the model and is a better error than
@@ -42,7 +42,9 @@ def get_chat_model(provider: ProviderType, model: str = "") -> BaseChatModel:
     if not api_key:
         raise ValueError(f"No API key for {provider!r}: set the {env_var} environment variable.")
 
-    model_name = model.strip() or MODEL_NAMES[provider]
+    # `or` rather than `is not None`: a blank string reaching here means an upstream boundary
+    # let one through, and falling back is the same safe answer as omitting it entirely.
+    model_name = (model or "").strip() or MODEL_NAMES[provider]
     if not model_name:
         raise ValueError(
             f"No model configured for {provider!r}: set MODEL_NAMES[{provider!r}] in agent/config.py."

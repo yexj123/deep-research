@@ -454,7 +454,11 @@ data: <json>
 
 ` in a `StreamingResponse`.
 
-### `api/routes/pages.py` [D-080 → D-121]
+### `api/routes/pages.py` [D-080 → D-121, D-126]
+**`GET /` renders the model dropdown from `RECOMMENDED_MODELS`** (D-126), so adding a model is
+a one-line config change and the server stays the single source of truth for what the page
+offers. Each option carries `data-provider`, which is what lets the browser filter by provider
+without a second copy of the list in JavaScript.
 **Defines:** `TEMPLATES_DIR`, `templates`, and three routes: `GET /` (the page),
 `GET /history` (the sidebar fragment), `GET /runs/{id}/view` (a conversation fragment), plus
 the `_render_turn` helper.
@@ -473,10 +477,10 @@ everything else is served from this app.
 
 | file | holds |
 |---|---|
-| `index.html` | the shell: the ask form (provider select + **free-text model field**, D-125), `#live-run`, `#loaded-run`, and the follow-up composer (D-121) |
+| `index.html` | the shell: the ask form (provider select + **model dropdown rendered from config, plus a "Custom…" field**, D-126), `#live-run`, `#loaded-run`, and the follow-up composer (D-121) |
 | `_history.html` | one sidebar entry per conversation, with a turn count (D-122) |
 | `_run_view.html` | every turn of one conversation; emits `data-follow-up` when the last turn has a review |
-| `app.js` | creating a run, the `EventSource` token stream, and which thread the composer targets |
+| `app.js` | creating a run, the `EventSource` token stream, which thread the composer targets, and the model picker's provider filtering + "Custom…" reveal (D-126). `NODE_LABELS` must name every graph node, which a test now checks against the compiled graph |
 | `app.css` | including `[hidden] { display: none !important; }`, which `form { display: flex }` would otherwise beat (D-122) |
 
 **Where the follow-up target comes from is the point:** the server sets `data-follow-up` only
@@ -505,6 +509,10 @@ turn so an active conversation stays at the top. `list_runs` still returns every
 days later, and a run that finished on a different model than it started on would produce a
 review blended from two with nothing reporting it. Migrated with no backfill — `''` already
 means "the provider's default", which is what every pre-D-125 run used.
+**`_run_from_row` is the one place a row becomes a `Run`** (D-126). The column is
+`TEXT NOT NULL DEFAULT ''` and Python's absent value is `None`, so the two representations meet
+there rather than at four call sites that could drift — which also removed four duplicated
+`Run(*row)` constructions.
 
 ### `agent/graph.py` [M1 → M4]
 **Defines:** `build_graph(model_factory, http_client, limiter, checkpointer)` (D-032, D-049, D-064),

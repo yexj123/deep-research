@@ -179,7 +179,7 @@ class CapturingFactory:
         self.reply = reply
         self.prompts: list[list[tuple[str, str]]] = []
 
-    def __call__(self, provider, model=""):  # noqa: ANN001 - matches ModelFactory's shape
+    def __call__(self, provider, model=None):  # noqa: ANN001 - matches ModelFactory's shape
         outer = self
 
         class _Model:

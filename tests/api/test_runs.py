@@ -465,17 +465,35 @@ async def test_a_typed_model_reaches_the_factory_for_every_node(api) -> None:
 
 
 @pytest.mark.asyncio
-async def test_omitting_the_model_reaches_the_factory_as_empty(api) -> None:
-    """Empty means "the provider's default" and must not become the string "None" (D-125).
+async def test_omitting_the_model_reaches_the_factory_as_none(api) -> None:
+    """Omitted means "the provider's default", and arrives as None (D-126).
 
     The control for the test above: without it, a factory receiving *something* either way
-    would look correct while silently ignoring the override.
+    would look correct while silently ignoring the override. `None` rather than `""` because
+    "not chosen" and "chosen as blank" are different facts and only one is reachable.
     """
     client, factory = api
     thread_id = await start_run(client)
     await client.get(f"/runs/{thread_id}/stream")
 
-    assert set(factory.models) == {""}
+    assert set(factory.models) == {None}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sent", ["", "   ", None])
+async def test_a_blank_model_collapses_to_the_default(api, sent) -> None:
+    """"", "   " and an omitted field are the same fact (D-126).
+
+    Collapsed at the API boundary so nothing downstream has to tell three absent values
+    apart -- the kind of near-duplicate state that ends up handled in two places and one of
+    them wrong.
+    """
+    client, factory = api
+    created = await client.post("/runs", json={"question": "What is attention?", "model": sent})
+    assert created.status_code == 201, created.text
+
+    body = (await client.get(f"/runs/{created.json()['thread_id']}")).json()
+    assert body["model"] is None
 
 
 @pytest.mark.asyncio

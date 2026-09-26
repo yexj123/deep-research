@@ -10,6 +10,7 @@ from langgraph.graph.state import CompiledStateGraph
 
 from fastapi import HTTPException
 
+from deep_research.agent.config import MODEL_NAMES, RECOMMENDED_MODELS
 from deep_research.agent.coverage import summarize_coverage
 from deep_research.agent.runner import get_review, get_run_state
 from deep_research.api.rendering import render_coverage, render_review
@@ -23,8 +24,21 @@ router = APIRouter(tags=["pages"])
 
 @router.get("/", response_class=HTMLResponse)
 async def index(request: Request) -> HTMLResponse:
-    """The single page: ask a question, watch it run, read the review."""
-    return templates.TemplateResponse(request, "index.html")
+    """The single page: ask a question, watch it run, read the review.
+
+    The model options are rendered from `RECOMMENDED_MODELS` rather than written into the
+    template (D-126), so adding a model is a one-line config change and the server stays the
+    single source of truth for what the page offers. They are *suggestions*: the form also
+    accepts a custom name, and nothing validates against this list.
+    """
+    return templates.TemplateResponse(
+        request,
+        "index.html",
+        {
+            "recommended_models": RECOMMENDED_MODELS,
+            "default_models": MODEL_NAMES,
+        },
+    )
 
 
 @router.get("/history", response_class=HTMLResponse)

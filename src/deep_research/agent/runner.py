@@ -63,7 +63,7 @@ async def stream_run(
     thread_id: str,
     question: str,
     provider: ProviderType,
-    model: str = "",
+    model: str | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Stream a run, starting it or resuming it as the checkpoint requires (D-081).
 

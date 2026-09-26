@@ -29,21 +29,32 @@ class CreateRun(BaseModel):
 
     question: str
     provider: ProviderType = "openai"
-    # The exact model to use, typed by the user (D-125). Empty means the provider's default,
-    # so an old client that never sends this keeps working unchanged.
+    # The exact model to use, chosen or typed by the user (D-125, D-126). `None` means the
+    # provider's default, so a client that never sends this keeps working unchanged.
     #
     # Validated here as well as in `intake`: this turns a malformed name into a 422 the browser
     # can show, instead of a 500 from a run that started and then raised.
-    model: str = Field(default="", max_length=100)
+    model: str | None = Field(default=None, max_length=100)
     # The run this question follows up on, if any (D-121). A follow-up gets its own
     # thread and clean graph state; only its wording is inherited.
     follow_up_to: str | None = None
 
     @field_validator("model")
     @classmethod
-    def _model_name_is_usable(cls, value: str) -> str:
-        cleaned = value.strip()
-        if cleaned and not re.fullmatch(MODEL_NAME_PATTERN, cleaned):
+    def _model_name_is_usable(cls, value: str | None) -> str | None:
+        """Sanitize, then check the shape. **Not** checked against RECOMMENDED_MODELS.
+
+        That list is what the UI offers, not what the API permits (D-126): a model released
+        tomorrow must work by typing it, which is the whole point. What this rejects is
+        whitespace, control characters and anything long enough to be a payload rather than a
+        name -- input hygiene, not a policy on which models exist.
+        """
+        cleaned = (value or "").strip()
+        if not cleaned:
+            # "", "   " and an omitted field are the same fact; collapse them here so nothing
+            # downstream has to tell three absent values apart.
+            return None
+        if not re.fullmatch(MODEL_NAME_PATTERN, cleaned):
             raise ValueError(
                 f"{cleaned!r} is not a usable model name. Expected something like "
                 "'gpt-4o-mini' or 'deepseek-chat': letters, digits, and . _ - : / only."

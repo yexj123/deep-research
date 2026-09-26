@@ -7,8 +7,20 @@ API_KEY_ENV_VARS: dict[ProviderType, str] = {
     "deepseek": "DEEPSEEK_API_KEY",
 }
 
-# The default model per provider, used when the user does not type one (D-125).
+# The default model per provider, used when the user does not choose one (D-125).
 MODEL_NAMES: dict[ProviderType, str] = {"openai": "gpt-4o", "deepseek": "deepseek-flash"}
+
+# What the UI offers as quick-select options (D-126). **Suggestions, not a whitelist** -- the
+# form also takes a custom name, and nothing validates against this list. It lives here rather
+# than in the template so adding a model is a one-line config change, and so the server stays
+# the single source of truth for what the page shows.
+#
+# Expect this to go stale; that is fine and is exactly why the custom field exists. A model
+# missing from here still works by typing it.
+RECOMMENDED_MODELS: dict[ProviderType, list[str]] = {
+    "openai": ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini", "o3-mini"],
+    "deepseek": ["deepseek-flash", "deepseek-chat", "deepseek-reasoner"],
+}
 
 # What a typed model name may look like (D-125). Deliberately a *shape* check and not an
 # allowlist: providers add and retire models constantly, so a list would need maintaining

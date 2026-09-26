@@ -121,7 +121,9 @@ textarea { resize: vertical; }
 .row label:first-child { margin-left: 0; }
 
 /* Wide enough for a real model id, not so wide it crowds the button. */
-#model { width: 11rem; min-width: 8rem; }
+#model { max-width: 13rem; }
+#custom-model { flex: 1; min-width: 10rem; }
+#custom-model-row label { margin-left: 0; }
 #model-note { margin: 0; }
 
 button[type="submit"] {

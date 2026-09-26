@@ -36,27 +36,40 @@
           <option value="deepseek">DeepSeek</option>
         </select>
 
-        <!-- Free text, not a <select> (D-125): providers add and retire models constantly, so
-             a fixed list would be wrong within weeks and would lock the user out of the model
-             they actually want. The datalist offers the common ones without restricting to
-             them — a <datalist> suggests, an <option> list confines. Empty means the
-             provider's configured default. -->
+        <!-- Quick-select plus an escape hatch (D-126). The options are rendered from
+             RECOMMENDED_MODELS so adding one is a config change, and each carries its
+             provider so app.js can show only the relevant ones. "Custom…" reveals the text
+             field below, which accepts any name — a model released tomorrow must work
+             without a code change, which is why the list is a suggestion and not a whitelist.
+
+             Autoescaped by Jinja2 like everything else here; these values come from config,
+             but the template should not be the thing that assumes so. -->
         <label for="model">Model</label>
-        <input id="model" name="model" list="model-suggestions" autocomplete="off"
-               spellcheck="false" maxlength="100" placeholder="default">
-        <datalist id="model-suggestions">
-          <option value="gpt-4o"></option>
-          <option value="gpt-4o-mini"></option>
-          <option value="deepseek-chat"></option>
-          <option value="deepseek-reasoner"></option>
-        </datalist>
+        <select id="model" name="model">
+          {% for provider, models in recommended_models.items() %}
+            {% for model in models %}
+              <option value="{{ model }}" data-provider="{{ provider }}">
+                {{ model }}{% if model == default_models[provider] %} (default){% endif %}
+              </option>
+            {% endfor %}
+          {% endfor %}
+          <option value="__custom__">Custom…</option>
+        </select>
 
         <button type="submit" id="submit">Research</button>
       </div>
+
+      <!-- Hidden until "Custom…" is chosen. Kept out of the row above so revealing it does
+           not reflow the controls. -->
+      <div class="row" id="custom-model-row" hidden>
+        <label for="custom-model">Custom model</label>
+        <input id="custom-model" type="text" autocomplete="off" spellcheck="false"
+               maxlength="100" placeholder="e.g. gpt-4.1-mini">
+      </div>
+
       <p class="meta" id="model-note">
-        Leave the model blank to use the provider's default. The name is passed straight
-        through, so anything your key can reach works — an unknown one fails with that
-        provider's own error.
+        The model name is passed straight through, so anything your key can reach works — an
+        unknown one comes back as that provider's own error.
       </p>
     </form>
 

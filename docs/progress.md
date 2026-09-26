@@ -177,6 +177,29 @@ seeding, sharing no wording with any seed query — clear `MIN_LOCAL_PAPERS`. As
 
 Protocol: `docs/staleness-experiment.md`.
 
+## D-126 — the model picker's interface, specified (2026-09-26)
+
+D-125 shipped the capability; its *interface* was mine and unconfirmed. Three parts revised:
+the absent sentinel is **`None`** not `""`, the control is a **dropdown plus a "Custom…"
+field** not one free-text input, and the option list lives in **`config.py`** not the template.
+
+The dropdown change is the one that mattered in practice: a `<datalist>`'s suggestions are
+invisible until you focus and type, so it read as a free-text box and the common models were
+undiscoverable. Nothing validates against `RECOMMENDED_MODELS` — a model released tomorrow
+still works by typing it, which is the whole point.
+
+Verified in a real browser: OpenAI shows 5 + Custom, switching to DeepSeek re-filters and
+re-selects `deepseek-flash`, `"  gpt-4.1-nano  "` submits as `"gpt-4.1-nano"`, a blank custom
+field submits as `null`, and a full run on a typed `gpt-4o-mini` finished with 0 citation
+violations and 0 console errors.
+
+**Two UI bugs found by looking at that run, neither about the model:** `check_claims` had no
+entry in `NODE_LABELS`, so the trail showed the reader the raw node name (shipped in D-113,
+never noticed); and `research_worker` was labelled "Searching arXiv" while the events beneath
+it said "Answered … from 15 local paper(s)" — **D-118 exactly**, fixed in the worker then and
+left standing in the UI. The label list is now checked against the compiled graph, so the next
+node added fails a test instead of reaching a user.
+
 ## D-125 — the user types the model, and a broken corpus says so (2026-09-26)
 
 Two changes with one theme: **the app should not decide things for the user silently.**

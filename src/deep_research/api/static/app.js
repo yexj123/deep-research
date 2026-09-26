@@ -14,6 +14,12 @@ const violations = document.getElementById("violations");
 const coverage = document.getElementById("coverage");
 const submit = document.getElementById("submit");
 
+const providerSelect = document.getElementById("provider");
+const modelSelect = document.getElementById("model");
+const customModelRow = document.getElementById("custom-model-row");
+const customModelInput = document.getElementById("custom-model");
+const CUSTOM = "__custom__";
+
 const followUp = document.getElementById("follow-up");
 const followUpQuestion = document.getElementById("follow-up-question");
 const followUpSubmit = document.getElementById("follow-up-submit");
@@ -27,11 +33,56 @@ let followUpTarget = null;
 const NODE_LABELS = {
   intake: "Reading the question",
   decompose: "Planning subtopics",
-  research_worker: "Searching arXiv",
+  // NOT "Searching arXiv": since local-first (D-105) a worker may answer entirely from the
+  // corpus, and the `progress` events right above it say so by name. Claiming a search that
+  // did not happen is D-118's bug, which was fixed in the worker and left standing here.
+  research_worker: "Researching a subtopic",
   gap_check: "Checking for gaps",
   synthesize: "Writing the review",
+  // Added by D-113; the label was not, so the trail showed the raw node name to the reader.
+  check_claims: "Checking claims against the papers",
   check_citations: "Verifying citations",
 };
+
+// --- the model picker (D-126) -------------------------------------------------------------
+
+// Show only the models belonging to the selected provider, and keep "Custom…" always. The
+// options carry their own provider, so this needs no second copy of the list in JS -- the
+// server rendered it from config, and that stays the only source of truth.
+function syncModelsToProvider() {
+  const provider = providerSelect.value;
+  let firstVisible = null;
+  for (const option of modelSelect.options) {
+    const belongs = option.value === CUSTOM || option.dataset.provider === provider;
+    option.hidden = !belongs;
+    option.disabled = !belongs;
+    if (belongs && option.value !== CUSTOM && firstVisible === null) firstVisible = option.value;
+  }
+  // Switching provider while a now-hidden model is selected would submit a model the provider
+  // does not serve. Fall back to its first option, which is the configured default.
+  const current = modelSelect.selectedOptions[0];
+  if (!current || current.disabled) {
+    modelSelect.value = firstVisible ?? CUSTOM;
+  }
+  syncCustomModelVisibility();
+}
+
+function syncCustomModelVisibility() {
+  const custom = modelSelect.value === CUSTOM;
+  customModelRow.hidden = !custom;
+  if (custom) customModelInput.focus();
+}
+
+// What POST /runs should receive: null means "the provider's default", which the server and
+// the agent both understand as "not chosen" (D-126).
+function selectedModel() {
+  if (modelSelect.value !== CUSTOM) return modelSelect.value || null;
+  return customModelInput.value.trim() || null;
+}
+
+providerSelect.addEventListener("change", syncModelsToProvider);
+modelSelect.addEventListener("change", syncCustomModelVisibility);
+syncModelsToProvider();
 
 function setFollowUpTarget(threadId) {
   followUpTarget = threadId;
@@ -149,12 +200,12 @@ async function startRun(question, provider, followUpTo) {
   const response = await fetch("/runs", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    // Empty model means the provider's default (D-125); the server validates the shape and
+    // null model means the provider's default (D-126); the server validates the shape and
     // answers 422 rather than starting a run that will fail partway through.
     body: JSON.stringify({
       question,
       provider,
-      model: document.getElementById("model").value.trim(),
+      model: selectedModel(),
       follow_up_to: followUpTo,
     }),
   });

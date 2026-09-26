@@ -8,6 +8,7 @@ again (see tests/agent/test_runner.py).
 
 import pytest
 
+from deep_research.agent.config import RECOMMENDED_MODELS
 from tests.agent.fakes import DEFAULT_REPLY
 from tests.api.test_runs import finished_run, follow_up, start_run
 
@@ -168,6 +169,98 @@ async def test_opening_an_unknown_run_is_404(api) -> None:
     """A thread_id nobody created has no view, rather than an empty page."""
     client, _ = api
     assert (await client.get("/runs/never-created/view")).status_code == 404
+
+
+# ---- the model picker (D-126) ---------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_the_model_options_come_from_config_not_the_template(api) -> None:
+    """Adding a model must be a one-line config change (D-126).
+
+    If the template held the list, `RECOMMENDED_MODELS` and the page would drift, and the
+    drift would be invisible -- the form would keep working while offering the wrong models.
+    """
+    client, _ = api
+    page = (await client.get("/")).text
+
+    for provider, models in RECOMMENDED_MODELS.items():
+        for model in models:
+            assert f'value="{model}"' in page, f"{model} missing from the form"
+            assert f'data-provider="{provider}"' in page
+
+
+@pytest.mark.asyncio
+async def test_each_option_declares_its_provider(api) -> None:
+    """The browser filters the list by provider, and needs the mapping to do it (D-126).
+
+    Carried on the options themselves rather than duplicated into app.js, so the server stays
+    the only source of truth for what the page offers.
+    """
+    client, _ = api
+    page = (await client.get("/")).text
+
+    assert 'value="gpt-4o" data-provider="openai"' in page.replace("\n", " ")
+    assert 'data-provider="deepseek"' in page
+
+
+@pytest.mark.asyncio
+async def test_the_form_offers_a_custom_model_escape_hatch(api) -> None:
+    """A model released tomorrow must work without a code change (D-126).
+
+    This is the reason the list is a suggestion and not a whitelist, so it is worth pinning
+    that the escape hatch actually exists in the markup.
+    """
+    client, _ = api
+    page = (await client.get("/")).text
+
+    assert 'value="__custom__"' in page
+    assert 'id="custom-model"' in page
+    assert 'id="custom-model-row"' in page
+
+
+@pytest.mark.asyncio
+async def test_the_default_model_is_marked_in_the_list(api) -> None:
+    """The reader should be able to see which option an omitted model would have used."""
+    client, _ = api
+    page = (await client.get("/")).text
+    assert "(default)" in page
+
+
+@pytest.mark.asyncio
+async def test_every_graph_node_has_a_human_label(api) -> None:
+    """The progress trail must never show a raw node name (O-5).
+
+    `check_claims` shipped in D-113 without one, so the reader saw literally "check_claims"
+    in the trail -- found by looking at a real run in a browser, not by any test. A node added
+    later will do the same unless something compares the two lists.
+    """
+    client, _ = api
+    script = (await client.get("/static/app.js")).text
+
+    # Read from the compiled graph, not a list written here: a hardcoded list would need
+    # updating alongside the thing it is supposed to police, which is how check_claims got
+    # missed in the first place.
+    nodes = [n for n in client.app.state.graph.nodes if not n.startswith("__")]
+    assert nodes, "no nodes found; this check would pass vacuously"
+
+    for node in nodes:
+        assert f"{node}:" in script, f"{node} has no entry in NODE_LABELS"
+
+
+@pytest.mark.asyncio
+async def test_the_worker_label_does_not_claim_a_search(api) -> None:
+    """A worker may answer entirely from the corpus, so the label must not say "arXiv" (D-118).
+
+    The `progress` events name what actually happened ("Answered X from 15 local paper(s)").
+    A node label reading "Searching arXiv" directly above them contradicts the truth the run
+    just reported -- the same bug D-118 fixed in the worker and left standing in the UI.
+    """
+    client, _ = api
+    script = (await client.get("/static/app.js")).text
+    worker_label = script.split("research_worker:")[1].split(",")[0]
+
+    assert "arXiv" not in worker_label, worker_label
 
 
 # ---- conversations in the UI (D-121) --------------------------------------------------

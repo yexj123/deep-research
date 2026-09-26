@@ -10,6 +10,7 @@ second. This table is also what the history route lists.
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 
 import aiosqlite
 
@@ -48,12 +49,32 @@ class Run:
     parent_thread_id: str | None = None
     # The conversation this turn belongs to. Equals thread_id for a first question.
     session_id: str = ""
-    # The model this run was started with, or "" for the provider's default (D-125).
-    model: str = ""
+    # The model this run was started with, or None for the provider's default (D-125, D-126).
+    model: str | None = None
 
     @property
     def is_follow_up(self) -> bool:
         return self.parent_thread_id is not None
+
+
+def _run_from_row(row: tuple[Any, ...]) -> Run:
+    """One row as a `Run`, restoring the absent model to `None` (D-126).
+
+    SQLite stores `model` as `TEXT NOT NULL DEFAULT ''` -- the column shipped that way in
+    D-125, and making it nullable would mean rebuilding the table for no behavioural gain.
+    Python's absent value is `None`, so the two representations meet here, in the one place
+    every query goes through, rather than being converted at four call sites that could drift.
+    """
+    thread_id, question, provider, created_at, parent_thread_id, session_id, model = row[:7]
+    return Run(
+        thread_id=thread_id,
+        question=question,
+        provider=provider,
+        created_at=created_at,
+        parent_thread_id=parent_thread_id,
+        session_id=session_id,
+        model=model or None,
+    )
 
 
 @dataclass(frozen=True)
@@ -100,7 +121,7 @@ async def record_run(
     question: str,
     provider: ProviderType,
     parent: Run | None = None,
-    model: str = "",
+    model: str | None = None,
 ) -> Run:
     """Store a run before it executes, so the stream route can look up its question.
 
@@ -114,7 +135,9 @@ async def record_run(
         created_at=datetime.now(UTC).isoformat(),
         parent_thread_id=parent.thread_id if parent else None,
         session_id=parent.session_id if parent else thread_id,
-        model=model.strip(),
+        # Normalized once, here, so "  " and "" and None all become the same absent value
+        # rather than three variants the rest of the code has to keep distinguishing.
+        model=(model or "").strip() or None,
     )
     await conn.execute(
         "INSERT INTO runs (thread_id, question, provider, created_at, parent_thread_id,"
@@ -126,7 +149,7 @@ async def record_run(
             run.created_at,
             run.parent_thread_id,
             run.session_id,
-            run.model,
+            run.model or "",  # the column is NOT NULL; see _run_from_row
         ),
     )
     await conn.commit()
@@ -141,7 +164,7 @@ async def get_run(conn: aiosqlite.Connection, thread_id: str) -> Run | None:
         (thread_id,),
     ) as cursor:
         row = await cursor.fetchone()
-    return Run(*row) if row else None
+    return _run_from_row(row) if row else None
 
 
 async def list_runs(conn: aiosqlite.Connection, limit: int = 50) -> list[Run]:
@@ -152,7 +175,7 @@ async def list_runs(conn: aiosqlite.Connection, limit: int = 50) -> list[Run]:
         (limit,),
     ) as cursor:
         rows = await cursor.fetchall()
-    return [Run(*row) for row in rows]
+    return [_run_from_row(row) for row in rows]
 
 
 async def list_session_heads(conn: aiosqlite.Connection, limit: int = 50) -> list[SessionHead]:
@@ -179,8 +202,8 @@ async def list_session_heads(conn: aiosqlite.Connection, limit: int = 50) -> lis
         (limit,),
     ) as cursor:
         rows = await cursor.fetchall()
-    # row[:7] must match Run's field order exactly; the two aggregates follow it.
-    return [SessionHead(run=Run(*row[:7]), turns=row[7], last_at=row[8]) for row in rows]
+    # _run_from_row takes row[:7]; the two aggregates follow it.
+    return [SessionHead(run=_run_from_row(row), turns=row[7], last_at=row[8]) for row in rows]
 
 
 async def list_session(conn: aiosqlite.Connection, session_id: str) -> list[Run]:
@@ -191,4 +214,4 @@ async def list_session(conn: aiosqlite.Connection, session_id: str) -> list[Run]
         (session_id,),
     ) as cursor:
         rows = await cursor.fetchall()
-    return [Run(*row) for row in rows]
+    return [_run_from_row(row) for row in rows]

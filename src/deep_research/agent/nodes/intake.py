@@ -32,7 +32,7 @@ def intake(state: ResearchState, runtime: Runtime[RunContext]) -> dict[str, Any]
             f"intake: unknown provider {runtime.context.provider!r}; "
             f"expected one of {sorted(VALID_PROVIDERS)}."
         )
-    # An empty model means "use the provider's default" (D-125), so only a *typed* one is
+    # `None` means "use the provider's default" (D-125, D-126), so only a chosen one is
     # checked. Checked here, in the first node, because every later use of it costs money: a
     # malformed name would otherwise surface as a provider error partway through decompose,
     # after the run had already started streaming.

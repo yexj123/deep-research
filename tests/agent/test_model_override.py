@@ -27,16 +27,50 @@ def _runtime(context: RunContext) -> Runtime:
 # ---- the factory ----------------------------------------------------------------------
 
 
-def test_an_empty_model_uses_the_providers_default(monkeypatch) -> None:
-    """Empty means "whatever MODEL_NAMES says", which is what every run did before D-125.
+def test_an_absent_model_uses_the_providers_default(monkeypatch) -> None:
+    """`None` means "whatever MODEL_NAMES says", which is what every run did before D-125.
 
     This is what makes the override backward compatible: an omitted model needs no second
     code path, and every recording made before it stays reproducible.
+
+    `""` and `"   "` fall back too. They should never reach here -- the API boundary collapses
+    them to None (D-126) -- but a blank slipping through is an upstream bug, and falling back
+    is the same safe answer as omitting it rather than a second failure mode.
     """
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     assert get_chat_model("openai").model_name == MODEL_NAMES["openai"]
+    assert get_chat_model("openai", None).model_name == MODEL_NAMES["openai"]
     assert get_chat_model("openai", "").model_name == MODEL_NAMES["openai"]
     assert get_chat_model("openai", "   ").model_name == MODEL_NAMES["openai"]
+
+
+def test_every_recommended_model_is_a_usable_name() -> None:
+    """The UI's own suggestions must pass the validation the UI submits them to (D-126).
+
+    A recommended model that `intake` rejects would be a form offering an option that cannot
+    be chosen -- the kind of contradiction nothing else would catch, since the list and the
+    pattern live in the same file and are never compared.
+    """
+    import re
+
+    from deep_research.agent.config import MODEL_NAME_PATTERN, RECOMMENDED_MODELS
+
+    for provider, models in RECOMMENDED_MODELS.items():
+        assert models, f"{provider} has no recommended models"
+        for model in models:
+            assert re.fullmatch(MODEL_NAME_PATTERN, model), f"{provider}/{model}"
+
+
+def test_every_provider_default_is_offered_in_the_ui() -> None:
+    """The configured default must appear in its own dropdown (D-126).
+
+    Otherwise the form's first option silently differs from what an omitted model actually
+    uses, and the two only diverge further as models are added.
+    """
+    from deep_research.agent.config import RECOMMENDED_MODELS
+
+    for provider, default in MODEL_NAMES.items():
+        assert default in RECOMMENDED_MODELS[provider], f"{provider} default {default!r} missing"
 
 
 def test_a_typed_model_is_passed_through_verbatim(monkeypatch) -> None:
@@ -64,12 +98,12 @@ def test_a_missing_key_still_fails_before_the_model_is_considered(monkeypatch) -
 # ---- the intake boundary --------------------------------------------------------------
 
 
-def test_intake_accepts_a_run_with_no_model() -> None:
-    """The default path must stay untouched by the new validation."""
+@pytest.mark.parametrize("model", [None, ""])
+def test_intake_accepts_a_run_with_no_model(model) -> None:
+    """The default path must stay untouched by the new validation (D-126)."""
     state = ResearchState(question="  what is attention?  ")
-    assert intake(state, _runtime(RunContext(provider="openai")))["question"] == (
-        "what is attention?"
-    )
+    runtime = _runtime(RunContext(provider="openai", model=model))
+    assert intake(state, runtime)["question"] == "what is attention?"
 
 
 @pytest.mark.parametrize(
