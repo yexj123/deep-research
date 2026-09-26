@@ -12,9 +12,11 @@ before spending money on judging.
 """
 
 import asyncio
+import json
 import os
 import sqlite3
 import time
+from datetime import UTC, datetime
 
 import httpx
 import pytest
@@ -183,9 +185,27 @@ def monkeypatch_local_first() -> None:
     worker_module.LOCAL_FIRST = EVAL_LOCAL_FIRST
 
 
+def _days_since_seed() -> int | None:
+    """Whole days between the O-16 corpus seed and now, or None outside the staleness set.
+
+    Derived from the committed manifest and the clock, never passed in: it lands in the arm
+    name, and a hand-set label is exactly the mislabelling `arm_name` exists to prevent.
+    """
+    if EVAL_QUESTION_SET != "staleness":
+        return None
+    from tests.eval.seed_corpus import MANIFEST_FILE
+
+    manifest = json.loads(MANIFEST_FILE.read_text(encoding="utf-8"))
+    seeded_at = datetime.fromisoformat(manifest["seeded_at"])
+    return (datetime.now(UTC) - seeded_at).days
+
+
 def _settings() -> dict[str, object]:
     """Everything that makes one recording incomparable to another if it differs."""
+    age = _days_since_seed()
     return {
+        # Only for the staleness set, so no other arm name changes (O-16).
+        **({} if age is None else {"days_since_seed": age}),
         "provider": PROVIDER,
         "model": MODEL_NAMES[PROVIDER],
         "max_depth": EVAL_MAX_DEPTH,

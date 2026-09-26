@@ -3588,6 +3588,65 @@ return nothing.
   seed query — clear `MIN_LOCAL_PAPERS`. The circular check (do the seeded queries hit?) would
   have proved nothing.
 
+  ---
+
+  **Upgraded to difference-in-differences, 2026-09-26, with the t=0 pair recorded.** A single
+  STALE-vs-FRESH comparison in November confounds *age* with *mechanism* — BM25 over a fixed
+  corpus versus arXiv's live relevance ranking. The slow arm controls for that only indirectly.
+  Recording the same pair while the corpus was **15 hours old** measures the mechanism gap
+  directly, so November's number can have it subtracted:
+
+  ```
+  staleness  =  (STALE − FRESH)_nov  −  (STALE − FRESH)_t0
+  ```
+
+  It also establishes a noise floor: STALE reads the same frozen 1554 papers in November as it
+  did at t=0, so STALE@t0 vs STALE@Nov is pure run-to-run variance with retrieval held fixed —
+  which at n=10 could otherwise be mistaken for an effect. **The pair could only be recorded
+  while the corpus was new**, which is why it was done immediately rather than scheduled.
+
+  **The stale arm is genuinely sealed**, which had to be checked rather than assumed:
+  `research_worker` falls through to live arXiv for any subtopic the corpus does not cover
+  (D-105), and here that fallback would be contamination — current papers entering the arm
+  whose defining property is that it cannot see them, with the run succeeding and the review
+  looking fine. Measured: **30/30 subtopics answered locally, 0 of 200 prompt papers and 0 of
+  88 cited papers off-snapshot.**
+
+  **The baseline, and what November subtracts:**
+
+  | metric | STALE | FRESH | delta | SE |
+  |---|---|---|---|---|
+  | specificity | 0.80 | 0.77 | −0.03 | −1.3 |
+  | faithfulness | 0.98 | 0.97 | −0.01 | −0.6 |
+  | **relevancy** | 0.92 | 0.99 | **+0.08** | **+2.2** |
+  | citation_density | 2.12 | 1.93 | −0.19 | −1.3 |
+  | post-seed citations | 0 | 0 | 0 | — |
+
+  At zero age the two mechanisms are indistinguishable on quality — every metric under 2 SE
+  **except relevancy**, which favours the fresh arm. So the mechanism is *not* neutral, and a
+  November relevancy gap of that size would mean nothing about staleness. Subtracting it is the
+  whole point of the pair.
+
+  **The most useful number is one the plain design would have hidden.** The fresh arm cites 78
+  papers of which only 35 are in the snapshot — **43 (55%) are off-snapshot and none are new.**
+  They are older papers arXiv's ranking surfaced and BM25 did not. Seeing off-snapshot papers
+  in November would have been easy to read as staleness when more than half of it is just the
+  two retrieval methods disagreeing.
+
+  **A harness bug this surfaced, fixed before it could bite:** `save()` writes to
+  `recordings/<arm>/<id>.json` and overwrites by path, so November's run — same settings, same
+  arm name — would have landed on top of the baseline and destroyed it *silently*. `arm_name`
+  now derives `-age{N}d` from the manifest and the clock, for the staleness set only, so the
+  140 existing arm names are untouched. This is the D-094 mislabelling along a new axis: corpus
+  age is the independent variable, so two runs months apart are not the same configuration.
+  `test_recording_is_filed_under_the_arm_its_settings_describe` covers it.
+
+  **Recorded as a process note:** the t=0 arms were recorded minutes before `arm_name` learned
+  about age, so `days_since_seed` was backfilled — computed from each recording's own
+  `recorded_at` against the manifest, not hand-set, with the reviews untouched and the
+  consistency test verifying the rename. Re-recording would have cost two paid passes to obtain
+  identical data with one extra key.
+
 ### Summary
 
 | # | Item | Recommendation | Needed by |
@@ -3605,7 +3664,7 @@ return nothing.
 | ~~O-11~~ | Evaluation harness | **Settled → D-088** | ~~before O-13~~ |
 | ~~O-12~~ | ~~In-band claim checker~~ | **Settled -> D-113.** One node, one call, reading exactly what the writer read; failure recorded, never fatal | ~~After O-13~~ |
 | ~~O-15~~ | ~~Stop reason invisible on a clean run~~ | **Settled → D-099** | ~~Before a demo~~ |
-| **O-16** | **A covered topic never refreshes** | Report only (D-105) until a measured max age exists. **Corpus seeded 2026-09-25 — the clock is running**; protocol in `staleness-experiment.md` | Runnable from ~2026-11-01 |
+| **O-16** | **A covered topic never refreshes** | Report only (D-105) until a measured max age exists. **Corpus seeded 2026-09-25, t=0 baseline recorded 2026-09-26** — difference-in-differences, so November subtracts the mechanism gap rather than confusing it with age. Protocol in `staleness-experiment.md` | Runnable from ~2026-11-01 |
 | ~~O-17~~ | ~~A second source~~ | **Settled → D-124.** arXiv only, as a decision: S2 is closed to third-party apps, `sources/` is not an abstraction (`__init__.py` empty, `arxiv_id` is the corpus PK), and **69% of OpenAlex results have no arXiv ID**. Reopens if an A/B shows non-arXiv papers improve a review | ~~Before claiming the design is source-agnostic~~ |
 | ~~O-13~~ | ~~Local-first corpus, BM25 first~~ | **Settled.** The corpus pays (D-107: 65 arXiv requests to 1, -65% wall clock, quality flat). Full text does not (D-111: 2.8x the prompt, nothing past 2 SE) | ~~Milestone 6~~ |
 | ~~O-14~~ | ~~`MAX_DEPTH` default + a yield-based exit~~ | **Settled → D-096.** Adaptive exits instead of a lower ceiling: −66% searches, quality flat, 19/20 runs stop after one round | ~~Now~~ |

@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 import pytest
 
 from deep_research.agent.sources.models import Source
-from tests.eval.recording import QUESTION_SETS, load_questions
+from tests.eval.recording import QUESTION_SETS, arm_name, arms, load_questions
 from tests.eval.seed_corpus import MANIFEST_FILE, from_record, seed_queries, to_record
 
 pytestmark = pytest.mark.skipif(
@@ -108,6 +108,35 @@ def test_the_staleness_set_is_registered_for_recording() -> None:
     from now at the moment the experiment is finally runnable.
     """
     assert "staleness" in QUESTION_SETS
+
+
+def test_the_corpus_age_reaches_the_arm_name() -> None:
+    """Two runs of "the same arm" months apart are not the same configuration (O-16).
+
+    `save()` writes to `recordings/<arm>/<id>.json` and overwrites by path, so without the age
+    in the name November's run would land on top of the t=0 baseline and destroy the
+    comparison it was recorded for -- silently, since the files would simply be newer. Corpus
+    age is the experiment's independent variable, so leaving it out of the name is the D-094
+    mislabelling along a new axis.
+    """
+    base = {"question_set": "staleness", "retrieval_unit": "abstract-stale", "max_depth": 2}
+    assert arm_name({**base, "days_since_seed": 0}).endswith("-age0d")
+    assert arm_name({**base, "days_since_seed": 62}).endswith("-age62d")
+    assert arm_name({**base, "days_since_seed": 0}) != arm_name({**base, "days_since_seed": 62})
+
+
+def test_the_age_suffix_is_absent_for_every_other_question_set() -> None:
+    """The 140 committed arm names must not move (D-088).
+
+    Renaming an existing arm would orphan every recording filed under it, and
+    `test_recording_is_filed_under_the_arm_its_settings_describe` would fail across the board.
+    """
+    without = arm_name({"question_set": "broad", "retrieval_unit": "abstract", "max_depth": 2})
+    assert "-age" not in without
+
+    existing = [a for a in arms() if not a.startswith("staleness")]
+    assert existing, "no pre-existing arms to protect; this check proves nothing"
+    assert not any("-age" in a for a in existing)
 
 
 def test_seed_queries_include_the_question_itself() -> None:

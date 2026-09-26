@@ -104,8 +104,21 @@ def arm_name(settings: dict[str, Any]) -> str:
     # without it a new recording would silently overwrite the d2 baseline it is meant to be
     # compared against.
     exit_rule = settings.get("exit_rule", "fixed")
+    # How far into the staleness experiment this run happened (O-16). Absent for every other
+    # question set, so the 140 committed arm names are untouched.
+    #
+    # It belongs in the name for the same reason the question set does: the corpus's *age* is
+    # the independent variable, so a run two months after the seed is not the same
+    # configuration as one made the day after, however identical the rest of the settings are.
+    # Without it November's run would write to the same directory as the baseline and silently
+    # overwrite it -- `save()` overwrites by path -- destroying the comparison it was recorded
+    # for. That is the D-094 mislabelling along a new axis, and the same consistency test
+    # catches it.
+    age = settings.get("days_since_seed")
+    age_suffix = "" if age is None else f"-age{age}d"
     return (
-        f"{question_set}-{unit}-{'all' if top_n is None else f'top{top_n}'}-d{depth}-{exit_rule}"
+        f"{question_set}-{unit}-{'all' if top_n is None else f'top{top_n}'}-d{depth}"
+        f"-{exit_rule}{age_suffix}"
     )
 
 

@@ -33,11 +33,13 @@ Backed by `CLAUDE.md`, the output style, and `Edit(/tests/**)`, `Edit(/docs/**)`
       So D-117's fix does prevent a real failure — but pooled 1/240 = 0.42% still excludes
       D-089's implied ~3%, and most runs now make only one planner call at all (D-096). The
       1-in-10 remains unexplained
-- [ ] **O-16: run the staleness experiment — not before ~2026-11-01.** The corpus was seeded
-      **2026-09-25** and the clock is running; everything that could be done early is done.
-      Two paid record passes, then `compare`. **Do not re-run `seed_corpus` without
-      `--rebuild`** — it would re-fetch and stamp today, destroying the one property the
-      experiment depends on. Full protocol: `docs/staleness-experiment.md`
+- [ ] **O-16: run the staleness experiment — not before ~2026-11-01.** Corpus seeded
+      **2026-09-25**, **t=0 baseline recorded 2026-09-26**; everything that could be done early
+      is done. Two paid record passes, then `stale_purity` → `recency` → `-m eval -k age<N>d`
+      → `compare`, then **subtract the t=0 baseline** — the raw November delta is not the
+      answer. Two standing traps: **do not re-run `seed_corpus` without `--rebuild`** (it
+      re-fetches and stamps today), and **do not overwrite the `age0d` arms** — they are the
+      subtrahend. Full protocol: `docs/staleness-experiment.md`
 - [ ] *(Optional)* Delete the old 55 MB uv cache on C::
       `uv cache clean --cache-dir "$env:LOCALAPPDATA\uv\cache"`
 - [x] Fixed the four truncated comments in `state.py`
@@ -174,6 +176,33 @@ seeding, sharing no wording with any seed query — clear `MIN_LOCAL_PAPERS`. As
 *seeded* queries hit would have proved nothing.
 
 Protocol: `docs/staleness-experiment.md`.
+
+## O-16 upgraded to difference-in-differences — t=0 baseline recorded (2026-09-26)
+
+A single STALE-vs-FRESH comparison in November would confound **age** with **mechanism** (BM25
+over a fixed corpus vs arXiv's live ranking). Recording the same pair while the corpus was
+**15 hours old** measures the mechanism gap directly, so November subtracts it:
+`staleness = (STALE−FRESH)_nov − (STALE−FRESH)_t0`. It also gives a noise floor, since STALE
+reads the same frozen papers both times. The pair could only be recorded while the corpus was
+new.
+
+**The stale arm is sealed** — 30/30 subtopics answered locally, **0 of 200** prompt papers and
+**0 of 88** cited papers off-snapshot. Worth checking rather than assuming: a subtopic falling
+through to live arXiv would have put current papers in the arm defined by not seeing them,
+with the run succeeding and the review looking fine.
+
+**At t=0 the mechanisms are indistinguishable on quality** — every metric under 2 SE except
+**relevancy, +0.08 at +2.2 SE** favouring fresh. So the mechanism is not neutral, and a
+November relevancy gap that size would mean nothing about staleness.
+
+**The number the plain design would have hidden:** the fresh arm cites 78 papers, only 35 in
+the snapshot — **43 (55%) off-snapshot and none of them new**. Older papers arXiv ranked and
+BM25 didn't. In November that would have been easy to misread as staleness.
+
+**A harness bug fixed before it could bite:** `save()` overwrites by path, so November's run —
+identical settings, identical arm name — would have silently destroyed the baseline.
+`arm_name` now derives `-age{N}d` for the staleness set only; the 140 existing arms are
+untouched.
 
 ## /demo-check, 2026-09-25 — passed, after fixing what it found
 
