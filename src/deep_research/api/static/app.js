@@ -272,7 +272,63 @@ document.body.addEventListener("htmx:afterSwap", (event) => {
   setFollowUpTarget(session?.dataset.followUp ?? null);
 });
 
+// --- sidebar housekeeping (D-127) ---------------------------------------------------------
+
+// Edits are scoped to the conversation, matching what the sidebar lists. Each returns 204 and
+// nothing else, so the page re-fetches the list rather than patching the DOM: one rendering
+// path, server-side, and no chance of the sidebar disagreeing with the database.
+async function editSession(threadId, body) {
+  const response = await fetch(`/runs/${threadId}/session`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    alert(`Could not update that conversation (${response.status})`);
+    return;
+  }
+  document.body.dispatchEvent(new Event("refresh-history"));
+}
+
+async function deleteSession(threadId, title) {
+  // Native confirm(): irreversible and this is a single-user local tool, so a real modal
+  // would be more code for the same answer. It must be a hard stop, though -- the run's
+  // checkpoint goes with it, and that holds the sources and the review.
+  if (!confirm(`Delete "${title}" and all of its turns? This cannot be undone.`)) return;
+
+  const response = await fetch(`/runs/${threadId}/session`, { method: "DELETE" });
+  if (!response.ok) {
+    alert(`Could not delete that conversation (${response.status})`);
+    return;
+  }
+  // If the deleted conversation is the one on screen, clear it: leaving it visible would show
+  // a review that no longer exists anywhere.
+  loadedRun.replaceChildren();
+  setFollowUpTarget(null);
+  document.body.dispatchEvent(new Event("refresh-history"));
+}
+
 document.body.addEventListener("click", (event) => {
+  const star = event.target.closest("[data-star]");
+  if (star) {
+    editSession(star.dataset.star, { starred: star.getAttribute("aria-pressed") !== "true" });
+    return;
+  }
+
+  const rename = event.target.closest("[data-rename]");
+  if (rename) {
+    const next = prompt("Name this conversation (blank to use the question)", rename.dataset.title);
+    // null is Cancel; "" is a deliberate clear, and the two must not be conflated.
+    if (next !== null) editSession(rename.dataset.rename, { title: next });
+    return;
+  }
+
+  const remove = event.target.closest("[data-delete]");
+  if (remove) {
+    deleteSession(remove.dataset.delete, remove.dataset.title);
+    return;
+  }
+
   const entry = event.target.closest(".entry");
   if (entry) markActive(entry);
 

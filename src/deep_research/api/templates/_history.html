@@ -3,19 +3,37 @@
 
    Deliberately no per-run status here: that would need a checkpoint read per row (N+1) to
    show something the run view already states on open. The turn count is free -- it comes
-   from the same query as the row. #}
+   from the same query as the row.
+
+   The actions are SIBLINGS of the entry button, not children (D-127): a <button> cannot
+   contain a <button>, and nesting them would also make every rename click open the
+   conversation. They stay in the DOM when hidden so keyboard focus can still reach them. #}
 {% for session in sessions %}
-  <li>
+  <li class="entry-row{% if session.run.starred %} starred{% endif %}">
     <button type="button" class="entry"
             hx-get="/runs/{{ session.run.thread_id }}/view"
             hx-target="#loaded-run"
             hx-swap="innerHTML">
-      <span class="entry-title">{{ session.run.question }}</span>
+      <span class="entry-title">{{ session.run.display_title }}</span>
       <span class="meta">
         {{ session.last_at[:16].replace("T", " ") }}
         {%- if session.turns > 1 %} &middot; {{ session.turns }} turns{% endif %}
       </span>
     </button>
+
+    <span class="entry-actions">
+      {# aria-pressed, not a separate "unstar" control: it is one toggle, and a screen reader
+         should hear its state rather than have to infer it from the glyph. #}
+      <button type="button" class="icon star" title="Star this conversation"
+              aria-pressed="{{ 'true' if session.run.starred else 'false' }}"
+              data-star="{{ session.run.thread_id }}">{{ '★' if session.run.starred else '☆' }}</button>
+      <button type="button" class="icon" title="Rename"
+              data-rename="{{ session.run.thread_id }}"
+              data-title="{{ session.run.display_title }}">✎</button>
+      <button type="button" class="icon danger" title="Delete this conversation"
+              data-delete="{{ session.run.thread_id }}"
+              data-title="{{ session.run.display_title }}">🗑</button>
+    </span>
   </li>
 {% else %}
   <li class="meta empty">No runs yet.</li>

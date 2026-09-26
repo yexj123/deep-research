@@ -3072,7 +3072,90 @@ a full run on a typed `gpt-4o-mini` finished with 0 citation violations and 0 co
   exactly**, fixed in the worker at the time and left standing in the UI. Now "Researching a
   subtopic", with the specifics left to the events that know them.
 
+### D-127 - Delete, rename and star a conversation
+
+The sidebar had no way to remove anything, so it grows without bound — and the growth that
+matters is not the list, it is the file.
+
+**Delete removes the checkpoints, not just the rows.** A run's row is a few hundred bytes; its
+*checkpoint* holds the sources, the review and the full graph state, and that is what actually
+grows the database. Deleting rows alone would empty the sidebar and leave the bytes on disk
+forever: a delete that looks like it worked, which is this project's recurring failure shape
+(D-062, D-069, O-5) arriving in storage. `delete_session` returns the thread_ids precisely so
+the route can call `adelete_thread` for **each turn** — every turn is its own thread (D-121),
+so deleting only the one the user clicked would orphan every follow-up's state.
+
+**The corpus is deliberately untouched.** Its papers are shared with every other run and are
+the measured win (D-105, D-107); deleting a conversation should not make future research
+slower. Pinned by a test, because nothing else would notice — the next run would simply fall
+through to arXiv.
+
+**All three operations are session-scoped**, matching what the sidebar lists. Renaming one turn
+of a conversation would show a title that does not describe what opening it produces, and a
+half-deleted conversation is worse than none.
+
+**`title` and `starred` live on the `runs` table, read only from the head row.** Two columns do
+not justify a second table and a join in a single-user app — but that is the tradeoff, not an
+oversight: a follow-up row carries these columns and ignores them. `''` means "no title, show
+the question", so no backfill was needed and a rename is undone by setting it back to `''`.
+
+**`UpdateSession.title` uses `None` as its absent value, not `""`** — the opposite of
+`CreateRun.model` (D-126). There, blank and absent mean the same thing; here `""` is a
+*deliberate clear*, so conflating them would make un-renaming impossible. The prompt's Cancel
+(`null`) and an empty answer (`""`) are kept distinct in the browser for the same reason.
+
+Starred conversations sort above recency. Ordering by recency alone is what makes a long
+sidebar unusable — the conversation you care about sinks under every experiment since.
+
+**Two things this tidied on the way**, both of which had already bitten once:
+`ORDER BY 9` in `list_session_heads` became `ORDER BY starred DESC, last_at DESC` (the ordinal
+pointed at a different column every time one was added before it), and the nine-column
+`SELECT` list repeated in four queries became one `_RUN_COLUMNS` constant — forgetting one of
+them would hand `Run` a row whose fields are silently shifted by one.
+
+Native `confirm()` and `prompt()` rather than modals: irreversible action, single-user local
+tool, and a real dialog would be more code for the same answer. The confirm text names the
+conversation and says "and all of its turns", because the route is session-scoped.
+
 ## Open (proposed, not decided)
+
+- **O-18 — the corpus and the checkpointer fight over one write lock.** Found 2026-09-26 while
+  testing D-127, and it is a **real bug, not a test artifact**.
+
+  D-007 puts the checkpoints and the corpus in one SQLite file. The checkpointer is async
+  (`aiosqlite`); the corpus is a separate synchronous `sqlite3` connection (D-100). WAL allows
+  one writer at a time, so when `research_worker` indexes its results while the checkpointer is
+  writing, the corpus write waits on `busy_timeout` (**5000 ms**, the default) and then raises
+  `sqlite3.OperationalError: database is locked`.
+
+  Reproduced deterministically enough to measure: **~40% of runs** in one test selection, each
+  losing *every* subtopic's papers and adding ~5 s per subtopic:
+
+  ```
+  papers: 0
+  progress: Could not index results for 'attention mechanisms' (database is locked)
+  progress: Could not index results for 'positional encoding' (database is locked)
+  busy timeout: (5000,)    journal mode: ('wal',)
+  ```
+
+  **D-101's design is what made this findable** — the failure is reported on the progress
+  stream rather than swallowed, exactly as that decision intended. But reporting is not
+  handling: the papers are still lost, and the corpus is the project's one measured win
+  (D-107: 65 arXiv requests → 1, −65% wall clock). A corpus that intermittently fails to fill
+  degrades that silently *in aggregate*, since any single run still completes.
+
+  | Option | Pros | Cons |
+  |---|---|---|
+  | **A. Raise `busy_timeout`** on the corpus connection (say 30 s) | One line; WAL writers are short, so waiting should usually succeed | If the checkpointer holds a write transaction across a whole `Send` super-step, this just trades a lost write for a slow run |
+  | **B. Retry the index write** with backoff | Targeted; indexing is idempotent (D-100), so a retry is safe | Needs a measured retry budget, and hides how often it happens unless reported |
+  | **C. Give the corpus its own file** | No contention at all | Reverses D-007's one-file decision, and the corpus stops being backed up alongside the checkpoints |
+  | **D. Index after the run rather than inside the worker** | No concurrent write at all | Loses the "free, already paid for" property that makes indexing worth doing in the worker (D-101) |
+
+  **Recommendation: measure before choosing** — specifically, how long the checkpointer
+  actually holds the write lock under a `Send` fan-out. If it is milliseconds, **A** is
+  correct and costs nothing. If it is seconds, A is a trap and the answer is **C**. That
+  measurement is cheap and has not been done, and picking between them without it would be
+  D-077's guessed constant again.
 
 - **~~O-17~~ — settled → D-124.** Kept below for the evidence; the decision is above.
 
@@ -3803,6 +3886,7 @@ return nothing.
 | ~~O-12~~ | ~~In-band claim checker~~ | **Settled -> D-113.** One node, one call, reading exactly what the writer read; failure recorded, never fatal | ~~After O-13~~ |
 | ~~O-15~~ | ~~Stop reason invisible on a clean run~~ | **Settled → D-099** | ~~Before a demo~~ |
 | **O-16** | **A covered topic never refreshes** | Report only (D-105) until a measured max age exists. **Corpus seeded 2026-09-25, t=0 baseline recorded 2026-09-26** — difference-in-differences, so November subtracts the mechanism gap rather than confusing it with age. Protocol in `staleness-experiment.md` | Runnable from ~2026-11-01 |
+| **O-18** | **Corpus vs checkpointer write lock** | One SQLite file (D-007) + WAL = one writer; the corpus write hits the 5 s `busy_timeout` and **loses that subtopic's papers** in ~40% of contended runs. Measure how long the checkpointer holds the lock, then raise the timeout or split the file | Soon — it silently degrades D-107's measured win |
 | ~~O-17~~ | ~~A second source~~ | **Settled → D-124.** arXiv only, as a decision: S2 is closed to third-party apps, `sources/` is not an abstraction (`__init__.py` empty, `arxiv_id` is the corpus PK), and **69% of OpenAlex results have no arXiv ID**. Reopens if an A/B shows non-arXiv papers improve a review | ~~Before claiming the design is source-agnostic~~ |
 | ~~O-13~~ | ~~Local-first corpus, BM25 first~~ | **Settled.** The corpus pays (D-107: 65 arXiv requests to 1, -65% wall clock, quality flat). Full text does not (D-111: 2.8x the prompt, nothing past 2 SE) | ~~Milestone 6~~ |
 | ~~O-14~~ | ~~`MAX_DEPTH` default + a yield-based exit~~ | **Settled → D-096.** Adaptive exits instead of a lower ceiling: −66% searches, quality flat, 19/20 runs stop after one round | ~~Now~~ |

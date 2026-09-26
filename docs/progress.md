@@ -28,6 +28,11 @@ Backed by `CLAUDE.md`, the output style, and `Edit(/tests/**)`, `Edit(/docs/**)`
       corpus **primary key**, 73 uses across 9 files. OpenAlex is open and CC0 but **69% of
       its results carry no arXiv ID** (75/240 over 12 real subtopics). The claim is deleted,
       the capability is not built, and an A/B through the existing harness would reopen it
+- [ ] **O-18: the corpus loses papers to a write lock.** One SQLite file (D-007) + WAL = one
+      writer, so `index_sources` can hit the 5 s `busy_timeout` and drop that subtopic's
+      papers — ~40% of runs in one reproduction, ~5 s lost each time. **Measure how long the
+      checkpointer holds the lock first**, then raise the timeout or split the file. It
+      silently degrades D-107's measured win
 - [ ] **D-070: the planner repair-retry is still open** (D-120). Re-measured on the *second-round*
       prompt (the one carrying the explored list, which D-119 missed): **1 fenced reply in 120**.
       So D-117's fix does prevent a real failure — but pooled 1/240 = 0.42% still excludes
@@ -176,6 +181,39 @@ seeding, sharing no wording with any seed query — clear `MIN_LOCAL_PAPERS`. As
 *seeded* queries hit would have proved nothing.
 
 Protocol: `docs/staleness-experiment.md`.
+
+## D-127 — delete, rename and star a conversation (2026-09-26)
+
+The sidebar had no way to remove anything. The growth that matters is not the list, though —
+it is the file: a run's row is a few hundred bytes, its *checkpoint* holds the sources, the
+review and the full graph state. **Delete removes both**, one `adelete_thread` per turn, since
+every turn is its own thread (D-121). Verified against the database: the runs row, the
+checkpoints and the writes all go, and the corpus stays.
+
+All three operations are session-scoped, matching what the sidebar lists. `title` / `starred`
+live on the head row; `''` means "show the question", so a rename is undone by clearing it,
+and no backfill was needed. Starred sorts above recency — ordering by recency alone is what
+makes a long sidebar unusable.
+
+Tidied two things that had already bitten once: `ORDER BY 9` became `ORDER BY starred DESC,
+last_at DESC`, and the nine-column SELECT repeated in four queries became one `_RUN_COLUMNS`.
+
+## O-18 opened — the corpus and the checkpointer fight over one write lock
+
+Found while testing the above, and it is a **real bug, not a test artifact.** D-007 puts
+checkpoints and corpus in one SQLite file; the checkpointer is async and the corpus is a
+separate sync connection; WAL allows one writer. When `research_worker` indexes while the
+checkpointer is writing, the corpus write waits the default **5 s `busy_timeout`** and then
+raises `database is locked` — **losing every subtopic's papers**, in ~40% of runs in one
+reproduction.
+
+D-101's reporting is what made it findable (the failure appears on the progress stream rather
+than vanishing), but reporting is not handling: the corpus is the project's one measured win
+(D-107), and this degrades it silently in aggregate, since any single run still completes.
+
+**Recommendation: measure how long the checkpointer holds the lock before choosing a fix** —
+if it is milliseconds, raising the timeout costs nothing; if it is seconds, that is a trap and
+the corpus needs its own file. Picking without that number would be D-077 again.
 
 ## D-126 — the model picker's interface, specified (2026-09-26)
 

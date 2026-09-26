@@ -32,7 +32,17 @@ CREATE TABLE IF NOT EXISTS runs (
     -- re-read from config, because `stream_run` resumes a run from its checkpoint days later:
     -- without this, resuming would silently finish a run on a different model than it started
     -- on, and the review would be a blend of two.
-    model TEXT NOT NULL DEFAULT ''
+    model TEXT NOT NULL DEFAULT '',
+    -- Sidebar housekeeping, both *session-level* and therefore only read from the head row
+    -- (D-127). They live on `runs` rather than in a `sessions` table because two nullable
+    -- columns do not justify a second table and a join in a single-user app -- but that is the
+    -- tradeoff being made, not an oversight: a follow-up row carries these columns and ignores
+    -- them.
+    --
+    -- '' means "no title, show the question", which keeps every pre-D-127 row correct with no
+    -- backfill.
+    title TEXT NOT NULL DEFAULT '',
+    starred INTEGER NOT NULL DEFAULT 0
 )
 """
 
@@ -51,10 +61,33 @@ class Run:
     session_id: str = ""
     # The model this run was started with, or None for the provider's default (D-125, D-126).
     model: str | None = None
+    # Session-level, and only meaningful on the head row (D-127). A follow-up carries these
+    # columns and ignores them -- see the schema comment for why they are not a second table.
+    title: str = ""
+    starred: bool = False
+
+    @property
+    def display_title(self) -> str:
+        """What the sidebar shows: the given title, or the question it started with.
+
+        A property rather than a stored value, so renaming and un-renaming are the same
+        operation and there is never a title that has drifted from an empty string.
+        """
+        return self.title or self.question
 
     @property
     def is_follow_up(self) -> bool:
         return self.parent_thread_id is not None
+
+
+# Every column `_run_from_row` reads, in its exact order. One definition because four queries
+# select it: adding a column to the schema and forgetting one of them would hand `Run` a row
+# whose fields are silently shifted by one. Interpolated into SQL, which is safe because these
+# are literal column names from this file and never user input.
+_RUN_COLUMNS = (
+    "thread_id, question, provider, created_at, parent_thread_id, session_id, model,"
+    " title, starred"
+)
 
 
 def _run_from_row(row: tuple[Any, ...]) -> Run:
@@ -65,7 +98,17 @@ def _run_from_row(row: tuple[Any, ...]) -> Run:
     Python's absent value is `None`, so the two representations meet here, in the one place
     every query goes through, rather than being converted at four call sites that could drift.
     """
-    thread_id, question, provider, created_at, parent_thread_id, session_id, model = row[:7]
+    (
+        thread_id,
+        question,
+        provider,
+        created_at,
+        parent_thread_id,
+        session_id,
+        model,
+        title,
+        starred,
+    ) = row[:9]
     return Run(
         thread_id=thread_id,
         question=question,
@@ -74,6 +117,8 @@ def _run_from_row(row: tuple[Any, ...]) -> Run:
         parent_thread_id=parent_thread_id,
         session_id=session_id,
         model=model or None,
+        title=title or "",
+        starred=bool(starred),
     )
 
 
@@ -112,6 +157,11 @@ async def init_runs_table(conn: aiosqlite.Connection) -> None:
         # run recorded before D-125 used. Writing a model name in would claim a choice the
         # user never made.
         await conn.execute("ALTER TABLE runs ADD COLUMN model TEXT NOT NULL DEFAULT ''")
+    if "title" not in columns:
+        # '' means "no title, show the question", so every existing row is already correct.
+        await conn.execute("ALTER TABLE runs ADD COLUMN title TEXT NOT NULL DEFAULT ''")
+    if "starred" not in columns:
+        await conn.execute("ALTER TABLE runs ADD COLUMN starred INTEGER NOT NULL DEFAULT 0")
     await conn.commit()
 
 
@@ -159,8 +209,7 @@ async def record_run(
 async def get_run(conn: aiosqlite.Connection, thread_id: str) -> Run | None:
     """The recorded run, or None if this thread_id was never created."""
     async with conn.execute(
-        "SELECT thread_id, question, provider, created_at, parent_thread_id, session_id, model"
-        " FROM runs WHERE thread_id = ?",
+        f"SELECT {_RUN_COLUMNS} FROM runs WHERE thread_id = ?",
         (thread_id,),
     ) as cursor:
         row = await cursor.fetchone()
@@ -170,8 +219,7 @@ async def get_run(conn: aiosqlite.Connection, thread_id: str) -> Run | None:
 async def list_runs(conn: aiosqlite.Connection, limit: int = 50) -> list[Run]:
     """Recent runs, newest first. The history list in the UI."""
     async with conn.execute(
-        "SELECT thread_id, question, provider, created_at, parent_thread_id, session_id, model"
-        " FROM runs ORDER BY created_at DESC LIMIT ?",
+        f"SELECT {_RUN_COLUMNS} FROM runs ORDER BY created_at DESC LIMIT ?",
         (limit,),
     ) as cursor:
         rows = await cursor.fetchall()
@@ -188,29 +236,80 @@ async def list_session_heads(conn: aiosqlite.Connection, limit: int = 50) -> lis
     following up on an old conversation brings it back to the top where you just left it.
     """
     async with conn.execute(
-        "SELECT r.thread_id, r.question, r.provider, r.created_at, r.parent_thread_id,"
-        "       r.session_id, r.model,"
-        "       (SELECT COUNT(*) FROM runs t WHERE t.session_id = r.session_id),"
-        "       (SELECT MAX(t.created_at) FROM runs t WHERE t.session_id = r.session_id)"
-        " FROM runs r"
+        # No table alias: unqualified columns bind to the outer `runs`, which lets the same
+        # `_RUN_COLUMNS` string serve here as in the other three queries. The subquery aliases
+        # its own copy as `t`.
+        f"SELECT {_RUN_COLUMNS},"
+        "       (SELECT COUNT(*) FROM runs t WHERE t.session_id = runs.session_id) AS turns,"
+        "       (SELECT MAX(t.created_at) FROM runs t WHERE t.session_id = runs.session_id)"
+        "           AS last_at"
+        " FROM runs"
         # The head of a session is the turn that started it: `session_id` points at itself.
-        " WHERE r.thread_id = r.session_id"
-        # Ordinal 9 is the MAX(created_at) above. It moves whenever a column is added before
-        # it -- as `model` just did -- so it is checked by test_a_session_is_ordered_by_its
-        # _newest_turn rather than trusted.
-        " ORDER BY 9 DESC LIMIT ?",
+        " WHERE thread_id = session_id"
+        # Starred first, then most-recently-active. Ordering by the *aliases* rather than by
+        # ordinal position: this used to be `ORDER BY 9`, which silently pointed at a
+        # different column every time one was added before it.
+        " ORDER BY starred DESC, last_at DESC LIMIT ?",
         (limit,),
     ) as cursor:
         rows = await cursor.fetchall()
-    # _run_from_row takes row[:7]; the two aggregates follow it.
-    return [SessionHead(run=_run_from_row(row), turns=row[7], last_at=row[8]) for row in rows]
+    # _run_from_row takes row[:9]; the two aggregates follow it.
+    return [SessionHead(run=_run_from_row(row), turns=row[9], last_at=row[10]) for row in rows]
+
+
+async def delete_session(conn: aiosqlite.Connection, session_id: str) -> list[str]:
+    """Delete every turn of a conversation. Returns the thread_ids that were removed (D-127).
+
+    **Returns them because deleting the rows is only half the job.** Each turn has its own
+    LangGraph checkpoint -- that is where the sources, the review and the full state actually
+    live, and it is what makes the database grow. The caller passes these ids to
+    `checkpointer.adelete_thread`, one per turn, or the rows vanish from the sidebar while the
+    bytes stay on disk forever: a delete that looks like it worked.
+
+    Ordered oldest first only so the return value is stable for tests.
+
+    **The corpus is deliberately untouched.** Papers indexed by this conversation are shared
+    with every other run and are the artifact worth keeping (D-105); deleting a conversation
+    should not make future research slower.
+    """
+    async with conn.execute(
+        "SELECT thread_id FROM runs WHERE session_id = ? ORDER BY created_at ASC",
+        (session_id,),
+    ) as cursor:
+        thread_ids = [row[0] for row in await cursor.fetchall()]
+
+    if thread_ids:
+        await conn.execute("DELETE FROM runs WHERE session_id = ?", (session_id,))
+        await conn.commit()
+    return thread_ids
+
+
+async def rename_session(conn: aiosqlite.Connection, session_id: str, title: str) -> None:
+    """Set a conversation's display title, or clear it back to the question (D-127).
+
+    Written to the head row only, since that is the one the sidebar reads. An empty title is
+    not an error: it is how a rename is undone.
+    """
+    await conn.execute(
+        "UPDATE runs SET title = ? WHERE thread_id = ? AND thread_id = session_id",
+        (title.strip(), session_id),
+    )
+    await conn.commit()
+
+
+async def set_starred(conn: aiosqlite.Connection, session_id: str, starred: bool) -> None:
+    """Pin a conversation to the top of the sidebar, or unpin it (D-127)."""
+    await conn.execute(
+        "UPDATE runs SET starred = ? WHERE thread_id = ? AND thread_id = session_id",
+        (1 if starred else 0, session_id),
+    )
+    await conn.commit()
 
 
 async def list_session(conn: aiosqlite.Connection, session_id: str) -> list[Run]:
     """Every turn of one conversation, oldest first -- the order they were asked in."""
     async with conn.execute(
-        "SELECT thread_id, question, provider, created_at, parent_thread_id, session_id, model"
-        " FROM runs WHERE session_id = ? ORDER BY created_at ASC",
+        f"SELECT {_RUN_COLUMNS} FROM runs WHERE session_id = ? ORDER BY created_at ASC",
         (session_id,),
     ) as cursor:
         rows = await cursor.fetchall()

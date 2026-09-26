@@ -69,6 +69,38 @@ body {
 .history li + li { margin-top: .15rem; }
 .history .empty { padding: .4rem .5rem; }
 
+/* --- entry actions (D-127) --------------------------------------------------------- */
+
+.entry-row { display: flex; align-items: center; border-radius: 6px; }
+.entry-row:hover { background: #ececee; }
+.entry-row .entry { flex: 1; min-width: 0; }
+.entry-row .entry:hover { background: none; }  /* the row owns the hover now */
+
+/* Hidden until the row is hovered or something inside it has focus -- `:focus-within` is what
+   keeps them reachable by keyboard rather than hover-only. `visibility` rather than `display`
+   so the row does not reflow as the buttons appear. */
+.entry-actions { display: flex; gap: .1rem; padding-right: .25rem; visibility: hidden; }
+.entry-row:hover .entry-actions,
+.entry-row:focus-within .entry-actions { visibility: visible; }
+/* A starred row keeps its star visible when not hovered; the other two stay hidden. */
+.entry-row.starred .entry-actions { visibility: visible; }
+.entry-row.starred:not(:hover):not(:focus-within) .icon:not(.star) { visibility: hidden; }
+
+.icon {
+  padding: .2rem .25rem;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  font: inherit;
+  font-size: .85rem;
+  line-height: 1;
+  color: var(--muted);
+  cursor: pointer;
+}
+.icon:hover { background: #dcdce0; color: var(--fg); }
+.icon.star[aria-pressed="true"] { color: #c99700; }
+.icon.danger:hover { background: var(--warn-bg); color: var(--warn); }
+
 .entry {
   display: block;
   width: 100%;

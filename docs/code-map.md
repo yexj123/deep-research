@@ -478,7 +478,7 @@ everything else is served from this app.
 | file | holds |
 |---|---|
 | `index.html` | the shell: the ask form (provider select + **model dropdown rendered from config, plus a "Custom…" field**, D-126), `#live-run`, `#loaded-run`, and the follow-up composer (D-121) |
-| `_history.html` | one sidebar entry per conversation, with a turn count (D-122) |
+| `_history.html` | one sidebar entry per conversation, with a turn count (D-122), plus star / rename / delete actions as **siblings** of the entry button — a `<button>` cannot contain a `<button>`, and nesting would make every rename click open the conversation (D-127) |
 | `_run_view.html` | every turn of one conversation; emits `data-follow-up` when the last turn has a review |
 | `app.js` | creating a run, the `EventSource` token stream, which thread the composer targets, and the model picker's provider filtering + "Custom…" reveal (D-126). `NODE_LABELS` must name every graph node, which a test now checks against the compiled graph |
 | `app.css` | including `[hidden] { display: none !important; }`, which `form { display: flex }` would otherwise beat (D-122) |
@@ -509,6 +509,13 @@ turn so an active conversation stays at the top. `list_runs` still returns every
 days later, and a run that finished on a different model than it started on would produce a
 review blended from two with nothing reporting it. Migrated with no backfill — `''` already
 means "the provider's default", which is what every pre-D-125 run used.
+**`delete_session` returns the thread_ids it removed** (D-127), because deleting the rows is
+only half the job: each turn has its own LangGraph checkpoint, and that is where the sources,
+the review and the full state actually live. The route passes them to
+`checkpointer.adelete_thread`, one per turn. `rename_session` and `set_starred` write to the
+head row only, which is the one the sidebar reads.
+**`_RUN_COLUMNS` is the single column list** for all four queries that build a `Run` — adding a
+column and forgetting one of them would shift every field by one, silently.
 **`_run_from_row` is the one place a row becomes a `Run`** (D-126). The column is
 `TEXT NOT NULL DEFAULT ''` and Python's absent value is `None`, so the two representations meet
 there rather than at four call sites that could drift — which also removed four duplicated

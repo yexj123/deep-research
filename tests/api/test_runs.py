@@ -8,7 +8,8 @@ correctly, and that what reaches the browser is JSON-serializable.
 import httpx
 import pytest
 
-from tests.agent.fakes import DEFAULT_REPLY, RecordingFactory
+from deep_research.persistence.corpus import index_sources
+from tests.agent.fakes import DEFAULT_REPLY, RecordingFactory, make_source
 
 
 def parse_sse(body: str) -> list[tuple[str, str]]:
@@ -442,6 +443,184 @@ async def test_creating_a_run_returns_the_question_it_stored(api) -> None:
     assert created["question"] == "How does quantization speed up inference?"
     stored = (await client.get(f"/runs/{created['thread_id']}")).json()
     assert stored["question"] == created["question"], "returned == stored"
+
+
+# ---- sidebar housekeeping (D-127) -------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_deleting_a_conversation_removes_its_checkpoints_too(api) -> None:
+    """A delete that leaves the checkpoints is a delete that looks like it worked (D-127).
+
+    The row is a few hundred bytes; the checkpoint holds the sources, the review and the full
+    graph state, and it is what actually grows the database -- which is the reason to delete
+    anything. Asserted against the checkpointer, not against the sidebar, because the sidebar
+    would look right either way.
+    """
+    client, _ = api
+    thread_id = await finished_run(client, "a question worth deleting")
+
+    graph = client.app.state.graph
+    assert (await graph.aget_state({"configurable": {"thread_id": thread_id}})).created_at
+
+    assert (await client.delete(f"/runs/{thread_id}/session")).status_code == 204
+
+    after = await graph.aget_state({"configurable": {"thread_id": thread_id}})
+    assert after.created_at is None, "the checkpoint outlived the run it belonged to"
+    assert (await client.get(f"/runs/{thread_id}")).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_deleting_a_conversation_removes_every_turns_checkpoint(api) -> None:
+    """Each turn is its own thread (D-121), so each has its own checkpoint.
+
+    Deleting only the one the user clicked would orphan every follow-up's state -- invisible,
+    since the sidebar lists the head and the follow-ups were never shown separately.
+    """
+    client, factory = api
+    first = await finished_run(client, "the first question", factory)
+    second = await follow_up(client, first, "the follow-up")
+    factory.restart()
+    await client.get(f"/runs/{second}/stream")
+
+    graph = client.app.state.graph
+    assert (await graph.aget_state({"configurable": {"thread_id": second}})).created_at
+
+    await client.delete(f"/runs/{first}/session")
+
+    for turn in (first, second):
+        state = await graph.aget_state({"configurable": {"thread_id": turn}})
+        assert state.created_at is None, f"{turn} kept its checkpoint"
+
+
+@pytest.mark.asyncio
+async def test_deleting_from_any_turn_removes_the_whole_conversation(api) -> None:
+    """The route is session-scoped, so deleting "a follow-up" takes the conversation with it.
+
+    Surprising if unstated, which is why the docstring and the confirm text both say "and all
+    of its turns" -- but the alternative, a half-deleted conversation, is worse.
+    """
+    client, factory = api
+    first = await finished_run(client, "the first question", factory)
+    second = await follow_up(client, first, "the follow-up")
+
+    assert (await client.delete(f"/runs/{second}/session")).status_code == 204
+    assert (await client.get(f"/runs/{first}")).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_deleting_an_unknown_run_is_404(api) -> None:
+    """Not a silent success: a 204 for a thread that never existed hides a caller's bug."""
+    client, _ = api
+    assert (await client.delete("/runs/never-created/session")).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_the_corpus_survives_a_delete(api) -> None:
+    """Papers are shared across runs and are the artifact worth keeping (D-105, D-127).
+
+    Deleting a conversation must not make future research slower, and nothing else would
+    notice if it did -- the next run would simply fall through to arXiv.
+    """
+    client, _ = api
+    thread_id = await start_run(client, "a question whose corpus must survive")
+
+    # Indexed directly rather than by streaming a run. A run's own indexing races the
+    # checkpointer for the single write lock on the shared file (O-18), so relying on it made
+    # this test fail ~40% of the time for a reason that had nothing to do with deleting.
+    index_sources(client.app.state.corpus, [make_source()])
+    before = client.app.state.corpus.execute("SELECT COUNT(*) FROM papers").fetchone()[0]
+    assert before, "no papers indexed; this check would pass vacuously"
+
+    await client.delete(f"/runs/{thread_id}/session")
+
+    after = client.app.state.corpus.execute("SELECT COUNT(*) FROM papers").fetchone()[0]
+    assert after == before
+
+
+@pytest.mark.asyncio
+async def test_renaming_changes_what_the_sidebar_shows(api) -> None:
+    """The title is what the sidebar reads; the question stays what was asked (D-127)."""
+    client, _ = api
+    thread_id = await start_run(client, "How does speculative decoding work?")
+
+    assert (
+        await client.patch(f"/runs/{thread_id}/session", json={"title": "Decoding notes"})
+    ).status_code == 204
+
+    body = (await client.get("/history")).text
+    assert "Decoding notes" in body
+    assert "How does speculative decoding work?" not in body
+
+    # The question itself is untouched -- renaming is a display concern, not a rewrite.
+    assert (await client.get(f"/runs/{thread_id}")).json()["question"] == (
+        "How does speculative decoding work?"
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_empty_title_restores_the_question(api) -> None:
+    """"" is how a rename is undone, so it must not be treated as "not sent" (D-127).
+
+    This is why `UpdateSession.title` uses None as its absent value rather than "" -- the
+    opposite of `CreateRun.model`, where the two mean the same thing.
+    """
+    client, _ = api
+    thread_id = await start_run(client, "How does speculative decoding work?")
+    await client.patch(f"/runs/{thread_id}/session", json={"title": "Decoding notes"})
+
+    await client.patch(f"/runs/{thread_id}/session", json={"title": ""})
+
+    body = (await client.get("/history")).text
+    assert "How does speculative decoding work?" in body
+    assert "Decoding notes" not in body
+
+
+@pytest.mark.asyncio
+async def test_starring_moves_a_conversation_to_the_top(api) -> None:
+    """A starred conversation outranks a more recent one (D-127).
+
+    Ordering by recency alone is what makes a long sidebar unusable: the conversation you
+    care about sinks under every experiment since.
+    """
+    client, factory = api
+    old = await start_run(client, "the starred one")
+    await start_run(client, "something newer")
+
+    body = (await client.get("/history")).text
+    assert body.index("something newer") < body.index("the starred one")
+
+    await client.patch(f"/runs/{old}/session", json={"starred": True})
+
+    body = (await client.get("/history")).text
+    assert body.index("the starred one") < body.index("something newer")
+
+
+@pytest.mark.asyncio
+async def test_a_patch_can_set_one_field_without_clearing_the_other(api) -> None:
+    """Both fields are optional, so omitting one must leave it alone (D-127).
+
+    A PATCH that quietly reset `starred` every time a title changed would be the kind of bug
+    only noticed weeks later, when a star is missing and nobody remembers renaming it.
+    """
+    client, _ = api
+    thread_id = await start_run(client, "a question")
+    await client.patch(f"/runs/{thread_id}/session", json={"starred": True})
+
+    await client.patch(f"/runs/{thread_id}/session", json={"title": "Renamed"})
+
+    body = (await client.get("/history")).text
+    assert "Renamed" in body
+    assert 'aria-pressed="true"' in body, "the star was cleared by an unrelated rename"
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_field_is_rejected(api) -> None:
+    """`extra="forbid"` (D-061): a typo'd field must not silently do nothing."""
+    client, _ = api
+    thread_id = await start_run(client)
+    response = await client.patch(f"/runs/{thread_id}/session", json={"starrred": True})
+    assert response.status_code == 422
 
 
 # ---- the typed model (D-125) ----------------------------------------------------------

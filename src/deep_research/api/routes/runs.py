@@ -8,7 +8,7 @@ from dataclasses import asdict
 from collections.abc import AsyncIterator
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
@@ -17,7 +17,16 @@ from deep_research.agent.context import ProviderType
 from deep_research.agent.coverage import summarize_coverage
 from deep_research.agent.runner import RunState, get_review, get_run_state, stream_run
 from deep_research.api.rendering import render_coverage, render_review
-from deep_research.persistence.runs import Run, get_run, list_runs, list_session, record_run
+from deep_research.persistence.runs import (
+    Run,
+    delete_session,
+    get_run,
+    list_runs,
+    list_session,
+    record_run,
+    rename_session,
+    set_starred,
+)
 
 router = APIRouter(prefix="/runs", tags=["runs"])
 
@@ -143,6 +152,69 @@ async def create_run(request: Request, body: CreateRun) -> RunCreated:
         request.app.state.conn, thread_id, question, body.provider, parent, body.model
     )
     return RunCreated(thread_id=thread_id, question=question)
+
+
+class UpdateSession(BaseModel):
+    """A sidebar edit. Both fields optional: a request may set either, or both (D-127)."""
+
+    model_config = {"extra": "forbid"}  # an unknown field is a contract change (D-061)
+
+    # "" clears the title back to the question, which is how a rename is undone -- so this
+    # has to distinguish "not sent" (None) from "sent as empty" (""), and cannot use "" as
+    # its own absent value the way `model` does.
+    title: str | None = Field(default=None, max_length=200)
+    starred: bool | None = None
+
+
+async def _session_of(request: Request, thread_id: str) -> str:
+    """The session a thread belongs to, or 404. Shared by the two edit routes."""
+    run = await get_run(request.app.state.conn, thread_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail=f"no run {thread_id}")
+    return run.session_id or run.thread_id
+
+
+@router.patch("/{thread_id}/session", status_code=204)
+async def update_session(request: Request, thread_id: str, body: UpdateSession) -> Response:
+    """Rename or star the conversation this run belongs to (D-127).
+
+    Scoped to the *session*, not the turn, because that is what the sidebar lists: renaming
+    one turn of a conversation and leaving the rest would show a title that does not describe
+    what opening it produces.
+    """
+    session_id = await _session_of(request, thread_id)
+    conn = request.app.state.conn
+
+    if body.title is not None:
+        await rename_session(conn, session_id, body.title)
+    if body.starred is not None:
+        await set_starred(conn, session_id, body.starred)
+    return Response(status_code=204)
+
+
+@router.delete("/{thread_id}/session", status_code=204)
+async def delete_session_route(request: Request, thread_id: str) -> Response:
+    """Delete a whole conversation: its rows **and** every turn's checkpoint (D-127).
+
+    **The checkpoints are the point.** A turn's row is a few hundred bytes; its checkpoint
+    holds the sources, the review and the full graph state, and that is what actually grows
+    the database. Deleting rows alone would empty the sidebar while leaving the bytes on disk
+    forever -- a delete that looks like it worked, which is this project's recurring failure
+    shape (D-062, D-069, O-5) applied to storage.
+
+    One `adelete_thread` per turn, because each turn is its own thread (D-121). Deleting only
+    the one the user clicked would orphan every follow-up's checkpoint.
+
+    The corpus is untouched: its papers are shared with every other run and are the artifact
+    worth keeping (D-105).
+    """
+    session_id = await _session_of(request, thread_id)
+    thread_ids = await delete_session(request.app.state.conn, session_id)
+
+    checkpointer = request.app.state.graph.checkpointer
+    for turn_id in thread_ids:
+        await checkpointer.adelete_thread(turn_id)
+    return Response(status_code=204)
 
 
 @router.get("/{thread_id}/session")
