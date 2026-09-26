@@ -120,7 +120,9 @@ def _index_into_corpus(
 
 
 def _local_answer(
-    corpus: sqlite3.Connection | None, subtopic: str
+    corpus: sqlite3.Connection | None,
+    subtopic: str,
+    writer: Callable[[dict[str, Any]], None],
 ) -> list[Source]:
     """Papers already held locally for this subtopic, or `[]` to go to arXiv (O-13, D-105).
 
@@ -136,6 +138,13 @@ def _local_answer(
 
     A read failure returns `[]` rather than raising: the arXiv path still works, so a broken
     corpus should cost latency, not the subtopic (the D-101 rule, applied to reads).
+
+    **And it is reported, not swallowed** (D-125). `_index_into_corpus` already says this about
+    writes -- "a corpus that silently stops filling is this project's recurring shape (D-062,
+    D-069, O-5)" -- and reads carry the identical risk with worse symptoms: a locked or corrupt
+    database makes *every* subtopic fall through to arXiv, so runs get slower and more
+    expensive and nothing anywhere says why. O-16 exists because corpus staleness is invisible;
+    a corpus that is silently broken is the same bug with the evidence removed.
     """
     if corpus is None or not LOCAL_FIRST:
         return []
@@ -162,7 +171,8 @@ def _local_answer(
             else paper
             for paper in papers
         ]
-    except sqlite3.Error:
+    except sqlite3.Error as exc:
+        writer({"status": f"Local corpus unavailable for {subtopic!r} ({exc}); searching arXiv"})
         return []
 
 
@@ -196,7 +206,7 @@ def make_research_worker(
         # otherwise the local path would quietly accept subtopics the remote path rejects.
         query = build_search_query(subtopic)
 
-        local = _local_answer(corpus, subtopic)
+        local = _local_answer(corpus, subtopic, writer)
         if local:
             writer({"status": f"Answered {subtopic!r} from {len(local)} local paper(s)"})
             return {

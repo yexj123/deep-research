@@ -72,7 +72,7 @@ def make_decompose(model_factory: ModelFactory) -> DecomposeNode:
     """Build the decompose node with its model factory captured in a closure (D-032)."""
 
     async def decompose(state: ResearchState, runtime: Runtime[RunContext]) -> dict[str, Any]:
-        model = model_factory(runtime.context.provider)
+        model = model_factory(runtime.context.provider, runtime.context.model)
 
         explored = "\n".join(f"- {t}" for t in state.explored_subtopics)
         human = f"Research question: {state.question}"

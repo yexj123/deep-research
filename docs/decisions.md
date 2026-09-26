@@ -2934,6 +2934,80 @@ found what a week of building would have discovered painfully. **Read the code b
 planning work on it**, which is the same lesson as D-104's unchecked sufficiency test and
 D-119's untested prompt.
 
+### D-125 - The user types the model, and a broken corpus says so
+
+Two changes that share a theme: **the app should not decide things for the user silently.**
+
+---
+
+**1. The corpus read path reports its failures.** `_local_answer` caught `sqlite3.Error` and
+returned `[]` with no message, while `_index_into_corpus` forty lines away caught the same
+error and *reported* it — its docstring already saying why: *"a corpus that silently stops
+filling is this project's recurring shape (D-062, D-069, O-5)."*
+
+Reads carry the identical risk with worse symptoms. A locked or corrupt database makes
+**every** subtopic fall through to arXiv, so runs get slower and more expensive and nothing
+anywhere says why. O-16 exists because corpus *staleness* is invisible; a corpus that is
+silently *broken* is the same bug with the evidence removed. The fallback itself stays —
+a read failure must cost latency, not the subtopic (D-101 applied to reads) — it just
+announces itself now.
+
+Two tests, because one is not enough: that the fallback still works, and that it is visible.
+A silent fallback passes the first and is exactly the bug.
+
+---
+
+**2. The model is typed, not chosen from a list.** `MODEL_NAMES` was the only way to pick a
+model, so using `gpt-4o-mini` or `deepseek-reasoner` meant editing `config.py`. Now the run
+form has a free-text field; empty means the provider's configured default, so every run made
+before this keeps behaving identically and no second code path exists.
+
+**It travels in `RunContext`, beside `provider`,** because it is the same kind of thing: a
+per-run choice that must reach the nodes through LangGraph's runtime context and never a
+module-level global (D-015). A global would make two concurrent runs share one model.
+
+**No allowlist, deliberately.** Providers add and retire models constantly, so a list would be
+wrong within weeks and would lock the user out of the model they actually want — which is the
+whole point of letting them type one. What *is* checked is the **shape**
+(`MODEL_NAME_PATTERN`): letters, digits and the separators real ids use, including `/` for
+`org/model` and `:` for `name:tag`. Whether the name exists is the provider's call, and its
+answer is better than ours — verified live:
+
+> `OpenAIModelNotFoundError: 404 - The model 'gpt-4o-imaginary' does not exist or you do not
+> have access to it.`
+
+**Validated at both boundaries**, for different failures: Pydantic on `POST /runs` turns a
+malformed name into a **422** before a thread exists, and `intake` rejects it in the first
+node so it cannot surface partway through `decompose` after the user has been billed for the
+planner call.
+
+**Stored on the run, not re-read from config.** `stream_run` resumes from a checkpoint days
+later; without a stored model a resumed run would finish on a different model than it started
+on, and the review would be a blend of two with nothing reporting it. Migrated with
+`ALTER TABLE` and **no backfill** — `''` already means "the provider's default", which is
+exactly what every pre-D-125 run used, and writing a name in would claim a choice the user
+never made.
+
+---
+
+**A gap the feature created, found by using it.** Typing a nonexistent model produced the
+provider's excellent 404 — in the *server log*. The browser saw only EventSource's generic
+error, and the page offered *"reload to resume"*, advice that for a bad model name fails
+identically forever. `GET /runs/{id}/stream` now catches at the outermost boundary of the
+live stream, logs the traceback, and emits a `failed` SSE event carrying the message. The
+checkpoint is untouched, so resuming still genuinely helps for the failures where it does.
+
+Distinct from the existing `error` handler on purpose: `failed` means *the server got far
+enough to explain itself*, `error` means the connection dropped and it did not.
+
+**Rejected:**
+- *A dropdown of known models* — wrong within weeks, and it re-creates the problem.
+- *Calling the provider's `/models` endpoint to validate* — a network round trip and an extra
+  failure mode before every run, to prevent an error the provider already reports clearly.
+- *Keeping the model in `config.py` only* — the status quo, which makes trying a cheaper model
+  a code edit and a restart.
+- *Re-reading the model from config on resume* — silently changes the model mid-run.
+
 ## Open (proposed, not decided)
 
 - **~~O-17~~ — settled → D-124.** Kept below for the evidence; the decision is above.

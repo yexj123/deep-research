@@ -106,7 +106,7 @@ h2 { margin: 2rem 0 .75rem; font-size: 1.1rem; color: var(--muted); font-weight:
 
 form { display: flex; flex-direction: column; gap: .75rem; }
 label { font-size: .85rem; color: var(--muted); }
-textarea, select {
+textarea, select, input[type="text"], #model {
   font: inherit;
   padding: .6rem;
   border: 1px solid var(--line);
@@ -114,8 +114,15 @@ textarea, select {
 }
 textarea { resize: vertical; }
 
-.row { display: flex; align-items: center; gap: .75rem; }
+.row { display: flex; align-items: center; gap: .75rem; flex-wrap: wrap; }
+/* The first label sits left; every later one pushes its own group rightward, which keeps
+   "Provider [x] Model [y] [Research]" reading as pairs rather than a run of controls. */
 .row label { margin-left: auto; }
+.row label:first-child { margin-left: 0; }
+
+/* Wide enough for a real model id, not so wide it crowds the button. */
+#model { width: 11rem; min-width: 8rem; }
+#model-note { margin: 0; }
 
 button[type="submit"] {
   font: inherit;

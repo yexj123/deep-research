@@ -57,8 +57,13 @@ uv run uvicorn deep_research.api.main:create_app --factory --reload
 
 Open <http://127.0.0.1:8000>.
 
-Type a question, pick a model, press **Research**. You'll see the node-by-node progress trail
-and live status from each search, then the review streaming in token by token.
+Type a question, pick a provider, press **Research**. You'll see the node-by-node progress
+trail and live status from each search, then the review streaming in token by token.
+
+**The model is a text field, not a dropdown.** Leave it blank for the provider's default, or
+type any model your key can reach — `gpt-4o-mini`, `deepseek-reasoner`, whatever ships next
+month. The name is passed straight through, so there is no list to go stale; an unknown one
+comes back as that provider's own error, naming the model.
 
 Past conversations are listed in the sidebar; click one to reopen it, and every turn of it
 comes back. A run that never started or was interrupted offers to start or resume — resuming

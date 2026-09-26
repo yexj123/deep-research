@@ -177,6 +177,32 @@ seeding, sharing no wording with any seed query — clear `MIN_LOCAL_PAPERS`. As
 
 Protocol: `docs/staleness-experiment.md`.
 
+## D-125 — the user types the model, and a broken corpus says so (2026-09-26)
+
+Two changes with one theme: **the app should not decide things for the user silently.**
+
+**The corpus read path reported nothing.** `_local_answer` caught `sqlite3.Error` and returned
+`[]`; forty lines away `_index_into_corpus` caught the same error and *reported* it. Reads have
+worse symptoms — a locked database makes every subtopic fall through to arXiv, so runs get
+slower and costlier with no explanation. The fallback stays; it announces itself now. Two
+tests, because a silent fallback passes "it still works" and is exactly the bug.
+
+**The model is now a free-text field**, not `config.py`. It travels in `RunContext` beside
+`provider` — a per-run choice, never a global (D-015) — and empty means the provider's default,
+so every earlier run behaves identically. **No allowlist**: providers change models constantly,
+so shape is checked and existence is the provider's call. Validated at both boundaries (422 at
+the route, `ValueError` in `intake`) and **stored on the run**, so a resumed run cannot finish
+on a different model than it started on.
+
+Verified live: a real run on `gpt-4o-mini` (447 words, 0 citation violations, 13 s), a 422 for
+`"gpt 4o oops"`, and for `gpt-4o-imaginary` the provider's own *"The model … does not exist or
+you do not have access to it."*
+
+**A gap the feature created, found by using it:** that excellent 404 only reached the *server
+log*. The browser saw EventSource's generic error and the page offered "reload to resume" —
+advice that would fail identically forever. The stream now catches at its outermost boundary,
+logs the traceback, and emits a `failed` event carrying the message.
+
 ## O-16 upgraded to difference-in-differences — t=0 baseline recorded (2026-09-26)
 
 A single STALE-vs-FRESH comparison in November would confound **age** with **mechanism** (BM25

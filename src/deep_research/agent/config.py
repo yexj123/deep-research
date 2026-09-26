@@ -7,7 +7,18 @@ API_KEY_ENV_VARS: dict[ProviderType, str] = {
     "deepseek": "DEEPSEEK_API_KEY",
 }
 
+# The default model per provider, used when the user does not type one (D-125).
 MODEL_NAMES: dict[ProviderType, str] = {"openai": "gpt-4o", "deepseek": "deepseek-flash"}
+
+# What a typed model name may look like (D-125). Deliberately a *shape* check and not an
+# allowlist: providers add and retire models constantly, so a list would need maintaining
+# forever and would defeat the point of letting the user type one. Letters, digits and the
+# separators real model ids use -- including `/` for `org/model` forms and `:` for tags.
+#
+# What it rules out is whitespace, control characters and anything long enough to be a payload
+# rather than a name. The value is sent as a JSON field to the user's own provider with the
+# user's own key, so this is input hygiene, not a security boundary.
+MODEL_NAME_PATTERN: str = r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$"
 
 # Limits for every LLM call (D-038, D-039). The timeout covers each network wait, not
 # the whole call: while streaming, it's the longest silence allowed between pieces of data;

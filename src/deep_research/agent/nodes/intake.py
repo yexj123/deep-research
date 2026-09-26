@@ -1,14 +1,18 @@
 """intake node: where user input and run context first enter the graph (D-033)."""
 
+import re
 from typing import Any, get_args
 
 from langgraph.runtime import Runtime
 
+from deep_research.agent.config import MODEL_NAME_PATTERN
 from deep_research.agent.context import ProviderType, RunContext
 from deep_research.agent.state import ResearchState
 
 # Built from the Literal itself, so adding a provider never needs a second edit here.
 VALID_PROVIDERS: frozenset[str] = frozenset(get_args(ProviderType))
+
+_MODEL_NAME = re.compile(MODEL_NAME_PATTERN)
 
 
 def intake(state: ResearchState, runtime: Runtime[RunContext]) -> dict[str, Any]:
@@ -28,6 +32,17 @@ def intake(state: ResearchState, runtime: Runtime[RunContext]) -> dict[str, Any]
             f"intake: unknown provider {runtime.context.provider!r}; "
             f"expected one of {sorted(VALID_PROVIDERS)}."
         )
+    # An empty model means "use the provider's default" (D-125), so only a *typed* one is
+    # checked. Checked here, in the first node, because every later use of it costs money: a
+    # malformed name would otherwise surface as a provider error partway through decompose,
+    # after the run had already started streaming.
+    model = runtime.context.model
+    if model and not _MODEL_NAME.fullmatch(model):
+        raise ValueError(
+            f"intake: {model!r} is not a usable model name. Expected something like "
+            "'gpt-4o-mini' or 'deepseek-chat': letters, digits, and . _ - : / only."
+        )
+
     question = state.question.strip()
     if not question:
         raise ValueError("intake: the research question is empty or only whitespace.")

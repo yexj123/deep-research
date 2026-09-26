@@ -18,17 +18,31 @@ from deep_research.agent.context import ProviderType
 
 # Anything with this signature can be passed to build_graph(). Production passes
 # get_chat_model; tests pass a factory that returns GenericFakeChatModel.
-ModelFactory = Callable[[ProviderType], BaseChatModel]
+#
+# `model` is the user's typed override (D-125) and is second because it is optional: every
+# caller already had a provider, and defaulting it keeps "just use the configured model" a
+# one-argument call.
+ModelFactory = Callable[[ProviderType, str], BaseChatModel]
 
 
-def get_chat_model(provider: ProviderType) -> BaseChatModel:
-    """Return a configured chat model for `provider`, failing loudly if it can't be built."""
+def get_chat_model(provider: ProviderType, model: str = "") -> BaseChatModel:
+    """Return a configured chat model for `provider`, failing loudly if it can't be built.
+
+    `model` overrides the provider's configured default (D-125). Empty means "use the default",
+    which is what every run did before the override existed.
+
+    **Whether the name is real is the provider's call, not ours.** A typo reaches the API and
+    comes back as that provider's own 404, which names the model and is a better error than
+    anything a local list could produce -- and a local list would be wrong within weeks.
+    Shape is checked at the boundaries (`intake`, and Pydantic on the route) so an empty or
+    malformed name fails before a paid call rather than during one.
+    """
     env_var = API_KEY_ENV_VARS[provider]
     api_key = os.environ.get(env_var)
     if not api_key:
         raise ValueError(f"No API key for {provider!r}: set the {env_var} environment variable.")
 
-    model_name = MODEL_NAMES[provider]
+    model_name = model.strip() or MODEL_NAMES[provider]
     if not model_name:
         raise ValueError(
             f"No model configured for {provider!r}: set MODEL_NAMES[{provider!r}] in agent/config.py."

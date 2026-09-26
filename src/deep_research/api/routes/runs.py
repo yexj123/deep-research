@@ -1,6 +1,8 @@
 """Run routes: create a run, stream it, read a finished review (D-081, D-083)."""
 
 import json
+import logging
+import re
 import uuid
 from dataclasses import asdict
 from collections.abc import AsyncIterator
@@ -8,8 +10,9 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
+from deep_research.agent.config import MODEL_NAME_PATTERN
 from deep_research.agent.context import ProviderType
 from deep_research.agent.coverage import summarize_coverage
 from deep_research.agent.runner import RunState, get_review, get_run_state, stream_run
@@ -18,15 +21,34 @@ from deep_research.persistence.runs import Run, get_run, list_runs, list_session
 
 router = APIRouter(prefix="/runs", tags=["runs"])
 
+logger = logging.getLogger(__name__)
+
 
 class CreateRun(BaseModel):
     """The request body. Pydantic at the boundary, as everywhere else (D-013)."""
 
     question: str
     provider: ProviderType = "openai"
+    # The exact model to use, typed by the user (D-125). Empty means the provider's default,
+    # so an old client that never sends this keeps working unchanged.
+    #
+    # Validated here as well as in `intake`: this turns a malformed name into a 422 the browser
+    # can show, instead of a 500 from a run that started and then raised.
+    model: str = Field(default="", max_length=100)
     # The run this question follows up on, if any (D-121). A follow-up gets its own
     # thread and clean graph state; only its wording is inherited.
     follow_up_to: str | None = None
+
+    @field_validator("model")
+    @classmethod
+    def _model_name_is_usable(cls, value: str) -> str:
+        cleaned = value.strip()
+        if cleaned and not re.fullmatch(MODEL_NAME_PATTERN, cleaned):
+            raise ValueError(
+                f"{cleaned!r} is not a usable model name. Expected something like "
+                "'gpt-4o-mini' or 'deepseek-chat': letters, digits, and . _ - : / only."
+            )
+        return cleaned
 
 
 class RunCreated(BaseModel):
@@ -102,11 +124,13 @@ async def create_run(request: Request, body: CreateRun) -> RunCreated:
                 status_code=409, detail="that run has no review to follow up on yet"
             )
         question = await request.app.state.rewrite_follow_up(
-            question, parent.question, review, body.provider
+            question, parent.question, review, body.provider, body.model
         )
 
     thread_id = str(uuid.uuid4())
-    await record_run(request.app.state.conn, thread_id, question, body.provider, parent)
+    await record_run(
+        request.app.state.conn, thread_id, question, body.provider, parent, body.model
+    )
     return RunCreated(thread_id=thread_id, question=question)
 
 
@@ -147,6 +171,8 @@ async def read_run(request: Request, thread_id: str) -> dict[str, Any]:
         "thread_id": thread_id,
         "question": run.question,
         "provider": run.provider,
+        # "" means the provider's default was used (D-125).
+        "model": run.model,
         "status": (await get_run_state(graph, thread_id)).value,
         "review": values.get("review", ""),
         "citation_violations": values.get("citation_violations", []),
@@ -169,10 +195,25 @@ async def stream(request: Request, thread_id: str) -> StreamingResponse:
     graph = request.app.state.graph
 
     async def events() -> AsyncIterator[str]:
-        async for chunk in stream_run(graph, thread_id, run.question, run.provider):
-            event = _event_for(chunk)
-            if event is not None:
-                yield _sse(*event)
+        try:
+            async for chunk in stream_run(
+                graph, thread_id, run.question, run.provider, run.model
+            ):
+                event = _event_for(chunk)
+                if event is not None:
+                    yield _sse(*event)
+        except Exception as exc:  # noqa: BLE001 - the outermost boundary of a live stream
+            # **Say why the run stopped.** Letting this propagate truncates the SSE response,
+            # which reaches the browser as EventSource's generic error -- and the page then
+            # offers "reload to resume", advice that for a bad model name (D-125) will fail
+            # identically forever. The checkpoint is untouched, so the run stays genuinely
+            # resumable for the failures where resuming *does* help (D-081).
+            #
+            # Logged with the traceback as well as reported, because catching it here is what
+            # removes it from the server log.
+            logger.exception("run %s failed", thread_id)
+            yield _sse("failed", {"message": f"{type(exc).__name__}: {exc}"})
+            return
 
         # Always terminate with the finished review, whether this call produced it or a
         # previous one did (the FINISHED case yields no chunks at all).

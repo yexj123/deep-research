@@ -193,6 +193,54 @@ async def test_a_broken_corpus_falls_back_to_arxiv(local_first, corpus) -> None:
 
 
 @pytest.mark.asyncio
+async def test_a_broken_corpus_says_so_instead_of_failing_quietly(
+    local_first, corpus, monkeypatch
+) -> None:
+    """A read failure is reported, not swallowed (D-125).
+
+    The write path has said this since D-101 -- "a corpus that silently stops filling is this
+    project's recurring shape (D-062, D-069, O-5)" -- and the read path did the opposite: a
+    bare `except sqlite3.Error: return []`. The symptoms are worse on reads, because a locked
+    or corrupt database makes *every* subtopic fall through to arXiv, so runs get slower and
+    more expensive with nothing anywhere saying why.
+
+    The test above proves the fallback works; this one proves it is visible. Both are needed:
+    a silent fallback passes the first and is exactly the bug.
+    """
+    messages: list[dict] = []
+    monkeypatch.setattr(
+        "deep_research.agent.nodes.research_worker._progress_writer", lambda: messages.append
+    )
+    index_sources(corpus, COVERED)
+    corpus.close()
+
+    await _run(corpus)
+
+    statuses = [m.get("status", "") for m in messages]
+    assert any("corpus unavailable" in s.lower() for s in statuses), statuses
+    # And it names the subtopic, so a run with several failing subtopics is readable.
+    assert any(SUBTOPIC in s for s in statuses if "corpus unavailable" in s.lower())
+
+
+@pytest.mark.asyncio
+async def test_a_working_corpus_reports_no_failure(local_first, corpus, monkeypatch) -> None:
+    """The control: the failure message must not appear on the healthy path (D-125).
+
+    Without it, a writer that reported unconditionally would pass the test above while
+    crying wolf on every run.
+    """
+    messages: list[dict] = []
+    monkeypatch.setattr(
+        "deep_research.agent.nodes.research_worker._progress_writer", lambda: messages.append
+    )
+    index_sources(corpus, COVERED)
+
+    await _run(corpus)
+
+    assert not any("unavailable" in m.get("status", "").lower() for m in messages)
+
+
+@pytest.mark.asyncio
 async def test_a_malformed_subtopic_fails_the_same_way_with_or_without_the_corpus(
     local_first, corpus
 ) -> None:

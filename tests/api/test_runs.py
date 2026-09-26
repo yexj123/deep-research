@@ -59,7 +59,9 @@ async def follow_up(
     reason that has nothing to do with sessions.
     """
 
-    async def fake_rewrite(q: str, parent_question: str, review: str, provider: str) -> str:
+    async def fake_rewrite(
+        q: str, parent_question: str, review: str, provider: str, model: str = ""
+    ) -> str:
         return f"{q} (resolved)"
 
     client.app.state.rewrite_follow_up = fake_rewrite
@@ -394,7 +396,7 @@ async def test_a_follow_up_is_stored_as_the_rewritten_question(api) -> None:
 
     seen: list[tuple[str, str]] = []
 
-    async def fake_rewrite(question, parent_question, parent_review, provider):
+    async def fake_rewrite(question, parent_question, parent_review, provider, model=""):
         seen.append((question, parent_question))
         return "How does quantization compare to speculative decoding?"
 
@@ -425,7 +427,9 @@ async def test_creating_a_run_returns_the_question_it_stored(api) -> None:
     plain = await client.post("/runs", json={"question": "  What is attention?  "})
     assert plain.json()["question"] == "What is attention?", "stored stripped, returned stripped"
 
-    async def fake_rewrite(q: str, parent_question: str, review: str, provider: str) -> str:
+    async def fake_rewrite(
+        q: str, parent_question: str, review: str, provider: str, model: str = ""
+    ) -> str:
         return "How does quantization speed up inference?"
 
     client.app.state.rewrite_follow_up = fake_rewrite
@@ -438,6 +442,110 @@ async def test_creating_a_run_returns_the_question_it_stored(api) -> None:
     assert created["question"] == "How does quantization speed up inference?"
     stored = (await client.get(f"/runs/{created['thread_id']}")).json()
     assert stored["question"] == created["question"], "returned == stored"
+
+
+# ---- the typed model (D-125) ----------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_typed_model_reaches_the_factory_for_every_node(api) -> None:
+    """The model is a per-run choice, so it must travel in runtime context (D-015, D-125).
+
+    Asserted on *every* model the run built, not just the first: a global would work for the
+    planner and then leak into a concurrent run, and checking only one call would not see it.
+    """
+    client, factory = api
+    thread_id = (
+        await client.post("/runs", json={"question": "What is attention?", "model": "gpt-4o-mini"})
+    ).json()["thread_id"]
+    await client.get(f"/runs/{thread_id}/stream")
+
+    assert factory.models, "no models were built"
+    assert set(factory.models) == {"gpt-4o-mini"}
+
+
+@pytest.mark.asyncio
+async def test_omitting_the_model_reaches_the_factory_as_empty(api) -> None:
+    """Empty means "the provider's default" and must not become the string "None" (D-125).
+
+    The control for the test above: without it, a factory receiving *something* either way
+    would look correct while silently ignoring the override.
+    """
+    client, factory = api
+    thread_id = await start_run(client)
+    await client.get(f"/runs/{thread_id}/stream")
+
+    assert set(factory.models) == {""}
+
+
+@pytest.mark.asyncio
+async def test_the_model_is_stored_and_survives_a_resume(api) -> None:
+    """A resumed run must finish on the model it started on (D-125).
+
+    `stream_run` resumes from a checkpoint days later. If the model were re-read from config
+    rather than from the run, half the review would be written by one model and half by
+    another -- and nothing would report it.
+    """
+    client, _ = api
+    thread_id = (
+        await client.post("/runs", json={"question": "What is attention?", "model": "gpt-4o-mini"})
+    ).json()["thread_id"]
+
+    body = (await client.get(f"/runs/{thread_id}")).json()
+    assert body["model"] == "gpt-4o-mini"
+
+    session = (await client.get(f"/runs/{thread_id}/session")).json()
+    assert session[0]["thread_id"] == thread_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["gpt 4o", "x" * 101, "-leading", "a\nb"])
+async def test_a_malformed_model_is_refused_before_a_thread_exists(api, model: str) -> None:
+    """422 at the boundary, not a 500 from a run that started and then raised (D-013).
+
+    `intake` would also reject it, but only after POST /runs had handed back a thread_id the
+    caller would then stream into an exception.
+    """
+    client, _ = api
+    response = await client.post("/runs", json={"question": "What is attention?", "model": model})
+    assert response.status_code == 422, response.text
+
+
+@pytest.mark.asyncio
+async def test_a_model_with_surrounding_whitespace_is_accepted_and_trimmed(api) -> None:
+    """Typing into a text field produces stray spaces; that is a UI artifact, not an error."""
+    client, _ = api
+    created = await client.post(
+        "/runs", json={"question": "What is attention?", "model": "  gpt-4o-mini  "}
+    )
+    assert created.status_code == 201, created.text
+    body = (await client.get(f"/runs/{created.json()['thread_id']}")).json()
+    assert body["model"] == "gpt-4o-mini"
+
+
+@pytest.mark.asyncio
+async def test_a_run_that_raises_reports_why_instead_of_dying_silently(api, monkeypatch) -> None:
+    """A failing run explains itself over SSE (D-125).
+
+    Letting the exception propagate truncates the stream, which reaches the browser as
+    EventSource's generic error -- and the page then offers "reload to resume", advice that
+    for a bad model name will fail identically forever. Found by typing a nonexistent model
+    into a live server: the provider's 404 named the model, and the browser saw none of it.
+    """
+    client, _ = api
+    thread_id = await start_run(client)
+
+    async def boom(*args, **kwargs):
+        raise RuntimeError("The model `gpt-4o-imaginary` does not exist")
+        yield  # pragma: no cover - makes this an async generator
+
+    monkeypatch.setattr("deep_research.api.routes.runs.stream_run", boom)
+
+    events = parse_sse((await client.get(f"/runs/{thread_id}/stream")).text)
+    failures = [data for name, data in events if name == "failed"]
+
+    assert failures, f"no failure event; got {[n for n, _ in events]}"
+    assert "gpt-4o-imaginary" in failures[0], "the provider's own message must reach the reader"
 
 
 @pytest.mark.asyncio

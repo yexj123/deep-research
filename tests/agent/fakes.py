@@ -111,6 +111,8 @@ class RecordingFactory:
         if not self.replies:
             raise ValueError("RecordingFactory needs at least one reply")
         self.providers: list[ProviderType] = []
+        # The model argument each call received; "" means "the provider's default" (D-125).
+        self.models: list[str] = []
         self.models_built = 0
         self._position = 0
 
@@ -128,8 +130,11 @@ class RecordingFactory:
         """
         self._position = 0
 
-    def __call__(self, provider: ProviderType) -> BaseChatModel:
+    def __call__(self, provider: ProviderType, model: str = "") -> BaseChatModel:
         self.providers.append(provider)
+        # Recorded so a test can assert the typed model reached the factory (D-125), the same
+        # way `providers` proves the per-run provider did.
+        self.models.append(model)
         reply = self.replies[min(self._position, len(self.replies) - 1)]
         self._position += 1
         self.models_built += 1

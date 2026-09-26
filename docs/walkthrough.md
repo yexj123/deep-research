@@ -51,16 +51,18 @@ graph = build_graph(
 graph.astream(
     {"question": "What is attention in transformer models?"},
     {"configurable": {"thread_id": "..."}, "recursion_limit": RECURSION_LIMIT},
-    context=RunContext(provider="openai"),   # per-run, never a module global (D-015)
+    # per-run, never a module global (D-015). model="" = the provider's default (D-125)
+    context=RunContext(provider="openai", model=""),
     stream_mode=["updates", "messages"],
     version="v2",
 )
 ```
 
-Two things that are easy to get wrong here. The provider arrives through runtime `context`,
-not state and not a global, so concurrent runs can't overwrite each other's choice. And
-`recursion_limit` is **invoke config, not graph config** — leave it out and LangGraph
-silently uses its default of 25 instead of the measured 15 (D-077).
+Two things that are easy to get wrong here. The provider **and the model** arrive through
+runtime `context`, not state and not a global, so concurrent runs can't overwrite each other's
+choice — which is exactly what a module-level model name would cause once the user can type
+one (D-125). And `recursion_limit` is **invoke config, not graph config** — leave it out and
+LangGraph silently uses its default of 25 instead of the measured 15 (D-077).
 
 ### Step 1 — `intake`
 
@@ -71,6 +73,12 @@ provider isn't `openai`/`deepseek` (D-033). Without that check, calling the grap
 `context=` passes `None` through and dies later with an `AttributeError` far from the cause.
 A `Literal` type hint isn't enforced at runtime, so `RunContext(provider="gemini")`
 constructs happily — this is the only place that's caught.
+
+Since D-125 it also checks the *shape* of a typed model name, and for the same reason: every
+later use of it costs money, so `"gpt 4o"` must fail here rather than as a provider error
+partway through `decompose`, after the run has started streaming and the planner call has been
+billed. It checks shape only — whether the model exists is the provider's call, and its 404
+names the model better than any local list could.
 
 ### Step 2 — `decompose` (the planner)
 
@@ -514,6 +522,7 @@ and is worse than no example at all. Re-capture whenever any of these change:
 |---|---|
 | A node added, removed or renamed | the step headings, the graph diagram, the stream-order block |
 | A `ResearchState` field added or renamed | the final-state block, the one-writer note |
+| A `RunContext` field added | step 0's `astream` block and step 1's validation note |
 | `build_search_query` or the arXiv params | the query string and the request URL |
 | `Source`'s fields | the `Source(...)` block |
 | The `synthesize` prompt or `format_papers` | the `<papers>` block |

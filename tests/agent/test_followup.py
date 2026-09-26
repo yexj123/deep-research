@@ -27,7 +27,7 @@ class _Factory:
         self.boom = boom
         self.prompts: list[str] = []
 
-    def __call__(self, provider):  # noqa: ANN001 - matches ModelFactory
+    def __call__(self, provider, model=""):  # noqa: ANN001 - matches ModelFactory
         outer = self
 
         class _Model:

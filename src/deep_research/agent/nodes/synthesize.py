@@ -109,7 +109,7 @@ def make_synthesize(model_factory: ModelFactory) -> SynthesizeNode:
         if not state.sources:
             return {"review": NO_SOURCES_REVIEW}
 
-        model = model_factory(runtime.context.provider)
+        model = model_factory(runtime.context.provider, runtime.context.model)
 
         # Rank and prune before building the prompt (D-091). Measured across ten runs (D-090):
         # ~90% of supplied papers were never cited, and the cited count did not scale with

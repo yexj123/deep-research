@@ -118,6 +118,16 @@ function streamRun(threadId) {
     document.body.dispatchEvent(new Event("refresh-history"));
   });
 
+  // The server got far enough to explain itself -- a bad model name, a provider outage
+  // (D-125). Distinct from the `error` handler below, which fires when the connection itself
+  // drops and the server said nothing.
+  source.addEventListener("failed", (e) => {
+    addProgress(`Run stopped: ${JSON.parse(e.data).message}`);
+    source.close();
+    submit.disabled = false;
+    followUpSubmit.disabled = false;
+  });
+
   source.addEventListener("error", () => {
     // EventSource retries on its own, which would silently restart the run. The checkpoint
     // makes reconnecting safe (D-081), but an automatic retry hides failures -- so stop and
@@ -139,11 +149,27 @@ async function startRun(question, provider, followUpTo) {
   const response = await fetch("/runs", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ question, provider, follow_up_to: followUpTo }),
+    // Empty model means the provider's default (D-125); the server validates the shape and
+    // answers 422 rather than starting a run that will fail partway through.
+    body: JSON.stringify({
+      question,
+      provider,
+      model: document.getElementById("model").value.trim(),
+      follow_up_to: followUpTo,
+    }),
   });
 
   if (!response.ok) {
-    addProgress(`Could not start the run (${response.status})`);
+    // 422 carries FastAPI's validation detail, which names what was wrong with the model.
+    let reason = `${response.status}`;
+    try {
+      const detail = (await response.json()).detail;
+      if (Array.isArray(detail) && detail[0]?.msg) reason = detail[0].msg;
+      else if (typeof detail === "string") reason = detail;
+    } catch {
+      // A non-JSON error body is fine; the status code alone is still useful.
+    }
+    addProgress(`Could not start the run: ${reason}`);
     submit.disabled = false;
     followUpSubmit.disabled = false;
     return;

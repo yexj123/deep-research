@@ -423,7 +423,14 @@ limiter's semaphore binds to the first event loop that touches it.
 `httpx.MockTransport` client and a zero-delay limiter without monkeypatching. Run it with
 `uvicorn deep_research.api.main:create_app --factory`.
 
-### `api/routes/runs.py` [M5 → D-121]
+### `agent/context.py` [D-015 → D-125]
+**Defines:** `ProviderType` and `RunContext(provider, model="")`.
+**Why both fields live here:** each is a *per-run* choice that reaches the nodes through
+LangGraph's runtime context, never a module-level global — a global would make two concurrent
+runs share one provider or model (D-015, D-125). `model=""` means the provider's configured
+default from `MODEL_NAMES`, so an omitted model needs no second code path.
+
+### `api/routes/runs.py` [M5 → D-121, D-125]
 **Defines:** `CreateRun` / `RunCreated` (Pydantic at the boundary, D-013), `_sse`, `_event_for`,
 and five routes: `POST /runs`, `GET /runs`, `GET /runs/{id}`, `GET /runs/{id}/stream`,
 `GET /runs/{id}/session`.
@@ -432,6 +439,12 @@ parent (404 if unknown), reads its review (409 if there isn't one yet), and rewr
 question through `app.state.rewrite_follow_up` **before** the thread exists — so the graph sees
 one kind of question and history stores a real one. It returns the stored `question` alongside
 the `thread_id`, which is what lets the page show the reader what their question became.
+**`CreateRun.model` validates the typed model's shape** (D-125), turning a malformed name into
+a 422 before a thread exists rather than a 500 from a run that started and then raised.
+**The stream catches at its outermost boundary** and emits a `failed` event carrying the
+provider's own message (D-125). Without it a bad model name truncates the SSE response, which
+reaches the browser as EventSource's generic error and produces "reload to resume" — advice
+that would fail identically forever.
 **`_event_for` is deliberately not a passthrough:** raw `updates` chunks carry `Source` objects,
 which are not JSON-serializable, and the browser has no use for full state. It emits `node`,
 `progress`, `token` and `done` events instead — and filters `messages` to `synthesize`, or the
@@ -460,7 +473,7 @@ everything else is served from this app.
 
 | file | holds |
 |---|---|
-| `index.html` | the shell: the ask form, `#live-run`, `#loaded-run`, and the follow-up composer (D-121) |
+| `index.html` | the shell: the ask form (provider select + **free-text model field**, D-125), `#live-run`, `#loaded-run`, and the follow-up composer (D-121) |
 | `_history.html` | one sidebar entry per conversation, with a turn count (D-122) |
 | `_run_view.html` | every turn of one conversation; emits `data-follow-up` when the last turn has a review |
 | `app.js` | creating a run, the `EventSource` token stream, and which thread the composer targets |
@@ -488,6 +501,10 @@ table over; covered by `tests/api/test_runs_table.py`, which is the only thing t
 a pre-D-121 database.
 **`list_session_heads` is what the sidebar reads** (D-122), ordered by each session's newest
 turn so an active conversation stays at the top. `list_runs` still returns every turn.
+**`model` is stored, not re-read from config** (D-125): `stream_run` resumes from a checkpoint
+days later, and a run that finished on a different model than it started on would produce a
+review blended from two with nothing reporting it. Migrated with no backfill — `''` already
+means "the provider's default", which is what every pre-D-125 run used.
 
 ### `agent/graph.py` [M1 → M4]
 **Defines:** `build_graph(model_factory, http_client, limiter, checkpointer)` (D-032, D-049, D-064),

@@ -26,7 +26,12 @@ CREATE TABLE IF NOT EXISTS runs (
     -- follow-up was asked about, `session_id` groups a whole conversation for the UI.
     -- A first turn is its own session, so `session_id = thread_id`.
     parent_thread_id TEXT REFERENCES runs(thread_id),
-    session_id TEXT NOT NULL DEFAULT ''
+    session_id TEXT NOT NULL DEFAULT '',
+    -- The model the user typed, or '' for the provider's default (D-125). Stored rather than
+    -- re-read from config, because `stream_run` resumes a run from its checkpoint days later:
+    -- without this, resuming would silently finish a run on a different model than it started
+    -- on, and the review would be a blend of two.
+    model TEXT NOT NULL DEFAULT ''
 )
 """
 
@@ -43,6 +48,8 @@ class Run:
     parent_thread_id: str | None = None
     # The conversation this turn belongs to. Equals thread_id for a first question.
     session_id: str = ""
+    # The model this run was started with, or "" for the provider's default (D-125).
+    model: str = ""
 
     @property
     def is_follow_up(self) -> bool:
@@ -79,6 +86,11 @@ async def init_runs_table(conn: aiosqlite.Connection) -> None:
         await conn.execute("ALTER TABLE runs ADD COLUMN session_id TEXT NOT NULL DEFAULT ''")
         # Existing rows are each their own session, which is what they were.
         await conn.execute("UPDATE runs SET session_id = thread_id WHERE session_id = ''")
+    if "model" not in columns:
+        # No backfill: '' already means "the provider's default", which is exactly what every
+        # run recorded before D-125 used. Writing a model name in would claim a choice the
+        # user never made.
+        await conn.execute("ALTER TABLE runs ADD COLUMN model TEXT NOT NULL DEFAULT ''")
     await conn.commit()
 
 
@@ -88,6 +100,7 @@ async def record_run(
     question: str,
     provider: ProviderType,
     parent: Run | None = None,
+    model: str = "",
 ) -> Run:
     """Store a run before it executes, so the stream route can look up its question.
 
@@ -101,10 +114,11 @@ async def record_run(
         created_at=datetime.now(UTC).isoformat(),
         parent_thread_id=parent.thread_id if parent else None,
         session_id=parent.session_id if parent else thread_id,
+        model=model.strip(),
     )
     await conn.execute(
         "INSERT INTO runs (thread_id, question, provider, created_at, parent_thread_id,"
-        " session_id) VALUES (?, ?, ?, ?, ?, ?)",
+        " session_id, model) VALUES (?, ?, ?, ?, ?, ?, ?)",
         (
             run.thread_id,
             run.question,
@@ -112,6 +126,7 @@ async def record_run(
             run.created_at,
             run.parent_thread_id,
             run.session_id,
+            run.model,
         ),
     )
     await conn.commit()
@@ -121,7 +136,7 @@ async def record_run(
 async def get_run(conn: aiosqlite.Connection, thread_id: str) -> Run | None:
     """The recorded run, or None if this thread_id was never created."""
     async with conn.execute(
-        "SELECT thread_id, question, provider, created_at, parent_thread_id, session_id"
+        "SELECT thread_id, question, provider, created_at, parent_thread_id, session_id, model"
         " FROM runs WHERE thread_id = ?",
         (thread_id,),
     ) as cursor:
@@ -132,7 +147,7 @@ async def get_run(conn: aiosqlite.Connection, thread_id: str) -> Run | None:
 async def list_runs(conn: aiosqlite.Connection, limit: int = 50) -> list[Run]:
     """Recent runs, newest first. The history list in the UI."""
     async with conn.execute(
-        "SELECT thread_id, question, provider, created_at, parent_thread_id, session_id"
+        "SELECT thread_id, question, provider, created_at, parent_thread_id, session_id, model"
         " FROM runs ORDER BY created_at DESC LIMIT ?",
         (limit,),
     ) as cursor:
@@ -151,23 +166,27 @@ async def list_session_heads(conn: aiosqlite.Connection, limit: int = 50) -> lis
     """
     async with conn.execute(
         "SELECT r.thread_id, r.question, r.provider, r.created_at, r.parent_thread_id,"
-        "       r.session_id,"
+        "       r.session_id, r.model,"
         "       (SELECT COUNT(*) FROM runs t WHERE t.session_id = r.session_id),"
         "       (SELECT MAX(t.created_at) FROM runs t WHERE t.session_id = r.session_id)"
         " FROM runs r"
         # The head of a session is the turn that started it: `session_id` points at itself.
         " WHERE r.thread_id = r.session_id"
-        " ORDER BY 8 DESC LIMIT ?",
+        # Ordinal 9 is the MAX(created_at) above. It moves whenever a column is added before
+        # it -- as `model` just did -- so it is checked by test_a_session_is_ordered_by_its
+        # _newest_turn rather than trusted.
+        " ORDER BY 9 DESC LIMIT ?",
         (limit,),
     ) as cursor:
         rows = await cursor.fetchall()
-    return [SessionHead(run=Run(*row[:6]), turns=row[6], last_at=row[7]) for row in rows]
+    # row[:7] must match Run's field order exactly; the two aggregates follow it.
+    return [SessionHead(run=Run(*row[:7]), turns=row[7], last_at=row[8]) for row in rows]
 
 
 async def list_session(conn: aiosqlite.Connection, session_id: str) -> list[Run]:
     """Every turn of one conversation, oldest first -- the order they were asked in."""
     async with conn.execute(
-        "SELECT thread_id, question, provider, created_at, parent_thread_id, session_id"
+        "SELECT thread_id, question, provider, created_at, parent_thread_id, session_id, model"
         " FROM runs WHERE session_id = ? ORDER BY created_at ASC",
         (session_id,),
     ) as cursor:

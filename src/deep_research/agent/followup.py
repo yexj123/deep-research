@@ -61,7 +61,7 @@ SYSTEM_PROMPT = (
     "explanation."
 )
 
-Rewriter = Callable[[str, str, str, ProviderType], Awaitable[str]]
+Rewriter = Callable[[str, str, str, ProviderType, str], Awaitable[str]]
 
 
 def needs_context(question: str) -> bool:
@@ -78,7 +78,11 @@ def make_rewriter(model_factory: ModelFactory) -> Rewriter:
     """Build the rewriter with its model factory captured in a closure (D-032)."""
 
     async def rewrite(
-        question: str, parent_question: str, parent_review: str, provider: ProviderType
+        question: str,
+        parent_question: str,
+        parent_review: str,
+        provider: ProviderType,
+        model: str = "",
     ) -> str:
         """The follow-up as a standalone question, or unchanged if it already is one.
 
@@ -96,7 +100,7 @@ def make_rewriter(model_factory: ModelFactory) -> Rewriter:
             f"Follow-up: {question}"
         )
         try:
-            reply = await model_factory(provider).ainvoke(
+            reply = await model_factory(provider, model).ainvoke(
                 [("system", SYSTEM_PROMPT), ("human", human)]
             )
             rewritten = strip_code_fence(reply.text).strip().strip('"')

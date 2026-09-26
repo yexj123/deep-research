@@ -204,7 +204,7 @@ def make_check_claims(model_factory: ModelFactory) -> CheckClaimsNode:
             f"<evidence-{fence}>\n{evidence}\n</evidence-{fence}>"
         )
 
-        model = model_factory(runtime.context.provider)
+        model = model_factory(runtime.context.provider, runtime.context.model)
         try:
             reply = await model.ainvoke(
                 [("system", system_prompt(fence)), ("human", human)]

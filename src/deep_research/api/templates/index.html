@@ -30,13 +30,34 @@
                 placeholder="What is attention in transformer models?"></textarea>
 
       <div class="row">
-        <label for="provider">Model</label>
+        <label for="provider">Provider</label>
         <select id="provider" name="provider">
           <option value="openai">OpenAI</option>
           <option value="deepseek">DeepSeek</option>
         </select>
+
+        <!-- Free text, not a <select> (D-125): providers add and retire models constantly, so
+             a fixed list would be wrong within weeks and would lock the user out of the model
+             they actually want. The datalist offers the common ones without restricting to
+             them — a <datalist> suggests, an <option> list confines. Empty means the
+             provider's configured default. -->
+        <label for="model">Model</label>
+        <input id="model" name="model" list="model-suggestions" autocomplete="off"
+               spellcheck="false" maxlength="100" placeholder="default">
+        <datalist id="model-suggestions">
+          <option value="gpt-4o"></option>
+          <option value="gpt-4o-mini"></option>
+          <option value="deepseek-chat"></option>
+          <option value="deepseek-reasoner"></option>
+        </datalist>
+
         <button type="submit" id="submit">Research</button>
       </div>
+      <p class="meta" id="model-note">
+        Leave the model blank to use the provider's default. The name is passed straight
+        through, so anything your key can reach works — an unknown one fails with that
+        provider's own error.
+      </p>
     </form>
 
     <!-- The run happening now. Separate from #loaded-run on purpose: htmx replaces that
