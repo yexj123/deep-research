@@ -91,9 +91,13 @@ from it. Quality is unchanged: see [`docs/findings.md`](docs/findings.md).
 ```
 intake → decompose → (one worker per subtopic, in parallel) → gap_check
              ↑                                                    │
-             └───── another round could change the review ─────────┘
+             │                                                    │ two ways out
+             └──── another round could change the review ─────────┤
                                                                   │
-                      synthesize → check_claims → check_citations → done
+     ┌───────── otherwise — 19 of 20 runs stop here ──────────────┘
+     │
+     ▼
+     synthesize → check_claims → check_citations → done
 
 and inside each worker:
 
@@ -105,7 +109,7 @@ and inside each worker:
 | Step | What it does |
 |---|---|
 | `intake` | Validates the question and the run's provider |
-| `decompose` | The model proposes subtopics; **code** filters out ones already explored, ones that failed twice, and ones arXiv can't search |
+| `decompose` | The model proposes subtopics; **code** filters out ones already explored, ones that failed twice, and ones arXiv can't search. If nothing survives the filter it goes straight to `synthesize` — the other edge into it, and the one that stops a run ending silently with no review |
 | `research_worker` | Checks the local corpus first; searches arXiv only if it isn't covered, queued for arXiv's rate limit. Either way, results are indexed for next time |
 | `gap_check` | Another round only if one could change the review — not if the prompt is already full, nothing new was found, or the round came back empty. **19 of 20 runs stop after one round** |
 | `synthesize` | Ranks the run's papers with BM25, keeps the top 20, writes the review from those abstracts |
